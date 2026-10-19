@@ -31,7 +31,7 @@ services:
       Local__ServerUrl: http://server:5000
       Local__ServerApiKey: ${AUTH_API_KEY:?Thiếu AUTH_API_KEY trong .env}
     volumes:
-      - client-a-data:/data    # DB SQLite riêng của Machine A
+      - ./data/client-a-data:/data    # DB SQLite riêng của Machine A
     ports:
       - "127.0.0.1:5100:5100"  # UI + Local API của Machine A (chỉ trên máy chạy Docker)
 
@@ -48,7 +48,7 @@ services:
       Local__ServerUrl: http://server:5000
       Local__ServerApiKey: ${AUTH_API_KEY:?Thiếu AUTH_API_KEY trong .env}
     volumes:
-      - client-b-data:/data    # DB SQLite riêng của Machine B
+      - ./data/client-b-data:/data    # DB SQLite riêng của Machine B
     ports:
       - "127.0.0.1:5101:5100"  # UI + Local API của Machine B
 
