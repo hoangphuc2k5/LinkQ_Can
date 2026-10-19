@@ -1,0 +1,57 @@
+# Docker Compose: 1 Central API (server) + 2 client (Machine A, Machine B).
+# Chuẩn bị: copy .env.example -> .env rồi điền AUTH_API_KEY và SQL_CONNECTION_STRING.
+# Chạy:    docker compose up -d --build
+# Dừng:    docker compose down          (giữ dữ liệu client; thêm -v để xóa volume)
+name: linkq-weighing
+
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    image: weighing-server:latest
+    restart: unless-stopped
+    environment:
+      Auth__ApiKey: ${AUTH_API_KEY:?Thiếu AUTH_API_KEY trong .env (>= 16 ký tự)}
+      ConnectionStrings__Default: ${SQL_CONNECTION_STRING:?Thiếu SQL_CONNECTION_STRING trong .env}
+      Database__AutoMigrate: "true"
+    ports:
+      - "5000:5000"            # LAN: các máy client truy cập http://<IP-server>:5000
+
+  client-a:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    image: weighing-client:latest
+    restart: unless-stopped
+    depends_on:
+      - server
+    environment:
+      Local__ClientId: "Machine A"
+      Local__ServerUrl: http://server:5000
+      Local__ServerApiKey: ${AUTH_API_KEY:?Thiếu AUTH_API_KEY trong .env}
+    volumes:
+      - client-a-data:/data    # DB SQLite riêng của Machine A
+    ports:
+      - "127.0.0.1:5100:5100"  # UI + Local API của Machine A (chỉ trên máy chạy Docker)
+
+  client-b:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    image: weighing-client:latest
+    restart: unless-stopped
+    depends_on:
+      - server
+    environment:
+      Local__ClientId: "Machine B"
+      Local__ServerUrl: http://server:5000
+      Local__ServerApiKey: ${AUTH_API_KEY:?Thiếu AUTH_API_KEY trong .env}
+    volumes:
+      - client-b-data:/data    # DB SQLite riêng của Machine B
+    ports:
+      - "127.0.0.1:5101:5100"  # UI + Local API của Machine B
+
+volumes:
+  client-a-data:
+  client-b-data:

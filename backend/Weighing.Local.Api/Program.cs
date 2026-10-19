@@ -15,8 +15,9 @@ public class Program
         builder.Host.UseWindowsService(); // Chạy được cả console (dev/test) lẫn Windows Service (production).
         builder.Services.Configure<LocalOptions>(builder.Configuration.GetSection(LocalOptions.Section));
         var listenUrl = builder.Configuration[$"{LocalOptions.Section}:ListenUrl"] ?? "http://127.0.0.1:5100";
-        if (!Uri.TryCreate(listenUrl, UriKind.Absolute, out var u) || !(u.IsLoopback))
-            throw new InvalidOperationException("Local:ListenUrl phải là địa chỉ loopback (127.0.0.1/localhost) để không lộ ra mạng LAN.");
+        var allowNonLoopback = builder.Configuration.GetValue<bool>($"{LocalOptions.Section}:AllowNonLoopback");
+        if (!Uri.TryCreate(listenUrl, UriKind.Absolute, out var u) || (!u.IsLoopback && !allowNonLoopback))
+            throw new InvalidOperationException("Local:ListenUrl phải là địa chỉ loopback (127.0.0.1/localhost) để không lộ ra mạng LAN. Chỉ bật Local:AllowNonLoopback trong Docker image.");
         builder.WebHost.UseUrls(listenUrl);
 
         builder.Services.AddDbContextFactory<LocalDbContext>((sp, o) =>
@@ -51,8 +52,17 @@ public class Program
         if (string.IsNullOrWhiteSpace(opt.ServerApiKey)) throw new InvalidOperationException("Thiếu Local:ServerApiKey (biến môi trường Local__ServerApiKey).");
         await LocalBootstrap.InitializeAsync(app.Services.GetRequiredService<IDbContextFactory<LocalDbContext>>(), opt.ClientId);
 
+        // Docker image: UI Angular nằm trong wwwroot, phục vụ cùng origin với API.
+        if (Directory.Exists(Path.Combine(app.Environment.ContentRootPath, "wwwroot")))
+        {
+            app.UseDefaultFiles();
+            app.UseStaticFiles();
+        }
+
         app.UseCors("ui");
         app.MapControllers();
+        if (Directory.Exists(Path.Combine(app.Environment.ContentRootPath, "wwwroot")))
+            app.MapFallbackToFile("index.html");
         await app.RunAsync();
     }
 }

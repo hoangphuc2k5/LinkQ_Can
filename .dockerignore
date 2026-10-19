@@ -1,0 +1,16 @@
+.env
+
+# Loại trừ artifact build/IDE/dữ liệu cục bộ khỏi build context của Docker.
+**/bin
+**/obj
+**/.vs
+**/.git
+**/node_modules
+**/dist
+**/.angular
+**/*.db
+**/*.db-shm
+**/*.db-wal
+publish
+test-data
+backend/Weighing.Tests
