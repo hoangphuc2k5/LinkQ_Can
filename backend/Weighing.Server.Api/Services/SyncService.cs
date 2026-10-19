@@ -7,7 +7,7 @@ public sealed class SyncService(ServerDbContext db, TimeProvider clock, ILogger<
     /// <summary>
     /// Idempotent push. Toàn bộ batch chạy trong 1 transaction và giữ khóa ghi trên SyncCounter từ đầu đến commit:
     ///  - hai push đồng thời bị tuần tự hóa => không race khi kiểm tra trùng Id;
-    ///  - sequence được cấp tuần tự và commit đúng thứ tự => pull theo cursor không bao giờ bỏ sót bản ghi.
+    ///  - sequence được cấp tuần tự và commit đúng thứ tự => mọi reader thấy sequence N thì các sequence < N đã commit.
     /// </summary>
     public async Task<PushResponse> PushAsync(PushRequest req, CancellationToken ct)
     {
@@ -69,16 +69,23 @@ public sealed class SyncService(ServerDbContext db, TimeProvider clock, ILogger<
         return new PushResponse(results);
     }
 
-    public async Task<PullResponse> PullAsync(long cursor, int limit, CancellationToken ct)
+    /// <summary>Tra cứu tập trung toàn bộ phiếu của mọi trạm (lọc theo trạm, biển số, khoảng thời gian; phân trang).</summary>
+    public async Task<PagedResult<ServerWeighingRecordDto>> QueryRecordsAsync(string? clientId, string? search,
+        DateTime? fromUtc, DateTime? toUtc, int page, int pageSize, CancellationToken ct)
     {
-        limit = Math.Clamp(limit, 1, 500);
-        var rows = await db.WeighingRecords.AsNoTracking()
-            .Where(r => r.ServerSequence > cursor).OrderBy(r => r.ServerSequence).Take(limit + 1).ToListAsync(ct);
-        var hasMore = rows.Count > limit;
-        if (hasMore) rows.RemoveAt(rows.Count - 1);
-        var nextCursor = rows.Count > 0 ? rows[^1].ServerSequence : cursor;
-        return new PullResponse(rows.Select(r => new ServerWeighingRecordDto(r.Id, r.LicensePlate, r.WeightKg, r.Direction,
-            r.CargoStatus, r.WeighedAt, r.ClientId, r.ServerSequence)).ToList(), nextCursor, hasMore);
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, 200);
+        IQueryable<WeighingRecordEntity> q = db.WeighingRecords.AsNoTracking();
+        if (!string.IsNullOrWhiteSpace(clientId)) q = q.Where(r => r.ClientId == clientId);
+        var s = PlateNormalizer.Normalize(search);
+        if (s.Length > 0) q = q.Where(r => r.LicensePlate.Contains(s));
+        if (fromUtc.HasValue) { var f = fromUtc.Value.ToUniversalTime(); q = q.Where(r => r.WeighedAt >= f); }
+        if (toUtc.HasValue) { var t = toUtc.Value.ToUniversalTime(); q = q.Where(r => r.WeighedAt < t); }
+        var total = await q.CountAsync(ct);
+        var rows = await q.OrderByDescending(r => r.WeighedAt).ThenBy(r => r.Id)
+            .Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(ct);
+        return new(rows.Select(r => new ServerWeighingRecordDto(r.Id, r.LicensePlate, r.WeightKg, r.Direction,
+            r.CargoStatus, r.WeighedAt, r.ClientId, r.ServerSequence)).ToList(), total, page, pageSize);
     }
 
     private static bool SameContent(WeighingRecordEntity e, WeighingRecordDto d) =>

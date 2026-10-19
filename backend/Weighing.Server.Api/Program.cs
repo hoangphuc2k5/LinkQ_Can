@@ -10,6 +10,7 @@ public class Program
     public static async Task Main(string[] args)
     {
         var builder = WebApplication.CreateBuilder(args);
+        builder.Host.UseWindowsService(); // Chạy được cả console (dev/test) lẫn Windows Service (production).
 
         // Chuỗi kết nối lấy từ cấu hình/biến môi trường (ConnectionStrings__Default) - không hardcode mật khẩu.
         builder.Services.AddDbContext<ServerDbContext>((sp, o) =>

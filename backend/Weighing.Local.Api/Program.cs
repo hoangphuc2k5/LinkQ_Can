@@ -12,6 +12,7 @@ public class Program
     public static async Task Main(string[] args)
     {
         var builder = WebApplication.CreateBuilder(args);
+        builder.Host.UseWindowsService(); // Chạy được cả console (dev/test) lẫn Windows Service (production).
         builder.Services.Configure<LocalOptions>(builder.Configuration.GetSection(LocalOptions.Section));
         var listenUrl = builder.Configuration[$"{LocalOptions.Section}:ListenUrl"] ?? "http://127.0.0.1:5100";
         if (!Uri.TryCreate(listenUrl, UriKind.Absolute, out var u) || !(u.IsLoopback))

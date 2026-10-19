@@ -18,13 +18,6 @@ public sealed class SyncController(SyncService sync) : ControllerBase
             return BadRequest(ApiResponse<PushResponse>.Failed("bad_request", $"Cần ClientId và 1..{MaxBatch} bản ghi."));
         return Ok(ApiResponse<PushResponse>.Succeeded(await sync.PushAsync(req, ct)));
     }
-
-    [HttpGet("pull")]
-    public async Task<IActionResult> Pull([FromQuery] long cursor = 0, [FromQuery] int limit = 200, CancellationToken ct = default)
-    {
-        if (cursor < 0) return BadRequest(ApiResponse<PullResponse>.Failed("bad_request", "cursor phải >= 0."));
-        return Ok(ApiResponse<PullResponse>.Succeeded(await sync.PullAsync(cursor, limit, ct)));
-    }
 }
 
 [ApiController]

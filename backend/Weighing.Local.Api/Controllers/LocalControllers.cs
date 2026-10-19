@@ -27,7 +27,7 @@ public sealed class WeighingController(WeighingService service) : ControllerBase
     [HttpGet]
     public async Task<IActionResult> List([FromQuery] string? search, [FromQuery] DateTime? from, [FromQuery] DateTime? to,
         [FromQuery] int page = 1, [FromQuery] int pageSize = 20, CancellationToken ct = default) =>
-        Ok(ApiResponse<PagedResult<LocalWeighingDto>>.Succeeded(await service.QueryAsync(search, from, to, page, pageSize, ct)));
+        Ok(ApiResponse<HistoryResult>.Succeeded(await service.QueryAsync(search, from, to, page, pageSize, ct)));
 }
 
 [ApiController]
@@ -44,7 +44,7 @@ public sealed class SyncController(IDbContextFactory<LocalDbContext> factory, Sy
         var st = await db.SyncStates.AsNoTracking().SingleAsync(s => s.Id == 1, ct);
         var snap = tracker.Snapshot();
         var dto = new SyncStatusDto(options.Value.ClientId, snap.Online, snap.Syncing, pending, errors,
-            st.LastSuccessfulSyncAt, st.LastServerCursor, snap.LastError, snap.NextRetryAt, snap.ConsecutiveFailures);
+            st.LastSuccessfulSyncAt, snap.LastError, snap.NextRetryAt, snap.ConsecutiveFailures);
         return Ok(ApiResponse<SyncStatusDto>.Succeeded(dto));
     }
 

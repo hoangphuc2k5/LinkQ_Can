@@ -13,6 +13,9 @@ export class WeighingStore {
   readonly localServiceUp = signal(true);
   readonly records = signal<LocalWeighing[]>([]);
   readonly total = signal(0);
+  /** 'server' = lịch sử đầy đủ từ server; 'local' = server không khả dụng, chỉ có phiếu của máy này. */
+  readonly historySource = signal<'server' | 'local'>('server');
+  readonly historyWarning = signal<string | null>(null);
   readonly page = signal(1);
   readonly pageSize = 15;
   readonly search = signal('');
@@ -39,8 +42,11 @@ export class WeighingStore {
       const s = await this.api.status();
       this.localServiceUp.set(true);
       this.status.set(s);
-      // Dữ liệu mới từ máy kia (cursor đổi) hoặc trạng thái đồng bộ đổi (pending đổi) => nạp lại lịch sử.
-      if (!prev || prev.lastServerCursor !== s.lastServerCursor || prev.pendingCount !== s.pendingCount) await this.loadHistory();
+      // Nạp lại lịch sử khi: số phiếu chờ đổi, trạng thái server đổi (online/offline), hoặc đang xem nguồn 'local'.
+      const serverChanged = !prev || prev.serverOnline !== s.serverOnline;
+      if (!prev || prev.pendingCount !== s.pendingCount || serverChanged || this.historySource() === 'local') {
+        await this.loadHistory();
+      }
     } catch {
       this.localServiceUp.set(false);
     }
@@ -58,6 +64,7 @@ export class WeighingStore {
       }
       const r = await this.api.list({ search: this.search(), from, to, page: this.page(), pageSize: this.pageSize });
       this.records.set(r.items); this.total.set(r.total);
+      this.historySource.set(r.source); this.historyWarning.set(r.warning);
     } catch (e) {
       this.showToast('err', errorMessage(e));
     } finally {
