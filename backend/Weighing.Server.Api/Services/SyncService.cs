@@ -39,6 +39,13 @@ public sealed class SyncService(ServerDbContext db, TimeProvider clock, ILogger<
             {
                 if (SameContent(e, dto))
                     results.Add(new(dto.Id, PushItemStatus.Duplicate, e.ServerSequence, null));
+                else if (IsSecondWeighCompletion(e, dto))
+                {
+                    // Phiếu đã có trên server, trạm chỉ bổ sung cân lần 2. Không cấp sequence mới, không ghi đè phần còn lại.
+                    e.SecondWeightKg = dto.SecondWeightKg;
+                    e.CargoWeightKg = dto.CargoWeightKg;
+                    results.Add(new(dto.Id, PushItemStatus.Accepted, e.ServerSequence, null));
+                }
                 else
                 {
                     log.LogWarning("Sync conflict for record {RecordId} from client {ClientId}: same Id, different content", dto.Id, req.ClientId);
@@ -49,7 +56,8 @@ public sealed class SyncService(ServerDbContext db, TimeProvider clock, ILogger<
 
             var entity = new WeighingRecordEntity
             {
-                Id = dto.Id, LicensePlate = dto.LicensePlate, WeightKg = dto.WeightKg, Direction = dto.Direction,
+                Id = dto.Id, LicensePlate = dto.LicensePlate, FirstWeightKg = dto.FirstWeightKg,
+                SecondWeightKg = dto.SecondWeightKg, CargoWeightKg = dto.CargoWeightKg, Direction = dto.Direction,
                 CargoStatus = dto.CargoStatus, WeighedAt = dto.WeighedAt.ToUniversalTime(), ClientId = dto.ClientId,
                 CreatedAtServer = now, ServerSequence = ++next
             };
@@ -84,12 +92,27 @@ public sealed class SyncService(ServerDbContext db, TimeProvider clock, ILogger<
         var total = await q.CountAsync(ct);
         var rows = await q.OrderByDescending(r => r.WeighedAt).ThenBy(r => r.Id)
             .Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(ct);
-        return new(rows.Select(r => new ServerWeighingRecordDto(r.Id, r.LicensePlate, r.WeightKg, r.Direction,
-            r.CargoStatus, r.WeighedAt, r.ClientId, r.ServerSequence)).ToList(), total, page, pageSize);
+        return new(rows.Select(ToDto).ToList(), total, page, pageSize);
     }
 
+    public async Task<ServerWeighingRecordDto?> FindAsync(Guid id, CancellationToken ct)
+    {
+        var row = await db.WeighingRecords.AsNoTracking().FirstOrDefaultAsync(r => r.Id == id, ct);
+        return row is null ? null : ToDto(row);
+    }
+
+    private static ServerWeighingRecordDto ToDto(WeighingRecordEntity r) => new(r.Id, r.LicensePlate, r.FirstWeightKg,
+        r.SecondWeightKg, r.CargoWeightKg, r.Direction, r.CargoStatus, r.WeighedAt, r.ClientId, r.ServerSequence);
+
     private static bool SameContent(WeighingRecordEntity e, WeighingRecordDto d) =>
-        e.LicensePlate == d.LicensePlate && e.WeightKg == d.WeightKg && e.Direction == d.Direction &&
+        e.LicensePlate == d.LicensePlate && e.FirstWeightKg == d.FirstWeightKg && e.SecondWeightKg == d.SecondWeightKg &&
+        e.CargoWeightKg == d.CargoWeightKg && e.Direction == d.Direction && e.CargoStatus == d.CargoStatus &&
+        e.ClientId == d.ClientId && e.WeighedAt.ToUniversalTime().Ticks == d.WeighedAt.ToUniversalTime().Ticks;
+
+    /// <summary>Chỉ cho phép thêm cân lần 2 khi phiếu trên server chưa có cân lần 2 và các trường còn lại không đổi.</summary>
+    private static bool IsSecondWeighCompletion(WeighingRecordEntity e, WeighingRecordDto d) =>
+        e.SecondWeightKg is null && e.CargoWeightKg is null && d.SecondWeightKg is not null && d.CargoWeightKg is not null &&
+        e.LicensePlate == d.LicensePlate && e.FirstWeightKg == d.FirstWeightKg && e.Direction == d.Direction &&
         e.CargoStatus == d.CargoStatus && e.ClientId == d.ClientId &&
         e.WeighedAt.ToUniversalTime().Ticks == d.WeighedAt.ToUniversalTime().Ticks;
 }

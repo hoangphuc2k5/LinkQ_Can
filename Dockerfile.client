@@ -22,7 +22,10 @@ FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 WORKDIR /app
 COPY --from=build /app/out .
 COPY --from=web /web/dist/weighing-angular/browser ./wwwroot
-RUN mkdir -p /data && chown -R app:app /data
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libfontconfig1 fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /data && chown -R app:app /data
 ENV ASPNETCORE_ENVIRONMENT=Production \
     ASPNETCORE_URLS=http://0.0.0.0:5100 \
     Local__ListenUrl=http://0.0.0.0:5100 \

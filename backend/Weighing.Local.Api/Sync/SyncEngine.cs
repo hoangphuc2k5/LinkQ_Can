@@ -64,7 +64,8 @@ public sealed class SyncEngine(
         while (true)
         {
             await using var db = await factory.CreateDbContextAsync(ct);
-            var batch = await db.WeighingRecords.Where(r => r.SyncStatus == SyncStatus.Pending)
+            // AsNoTracking: chỉ cập nhật cột đồng bộ, không ghi đè cân lần 2 nếu người dùng vừa nhập trong lúc đẩy.
+            var batch = await db.WeighingRecords.AsNoTracking().Where(r => r.SyncStatus == SyncStatus.Pending)
                 .OrderBy(r => r.WeighedAt).ThenBy(r => r.Id).Take(Opt.PushBatchSize).ToListAsync(ct);
             if (batch.Count == 0) break;
 
@@ -75,9 +76,11 @@ public sealed class SyncEngine(
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)
             {
-                // Giữ nguyên Pending (không mất dữ liệu), chỉ ghi nhận lần thử thất bại.
-                foreach (var r in batch) { r.RetryCount++; r.LastSyncError = Trunc(ex.Message); }
-                await db.SaveChangesAsync(CancellationToken.None);
+                var ids = batch.Select(r => r.Id).ToList();
+                var message = Trunc(ex.Message);
+                await db.WeighingRecords.Where(r => ids.Contains(r.Id)).ExecuteUpdateAsync(s => s
+                    .SetProperty(x => x.RetryCount, x => x.RetryCount + 1)
+                    .SetProperty(x => x.LastSyncError, message), CancellationToken.None);
                 throw;
             }
 
@@ -89,17 +92,23 @@ public sealed class SyncEngine(
                 if (!byId.TryGetValue(r.Id, out var res)) continue;
                 if (res.Status is PushItemStatus.Accepted or PushItemStatus.Duplicate)
                 {
-                    r.SyncStatus = SyncStatus.Synced; r.SyncedAt = now; r.ServerSequence = res.ServerSequence; r.LastSyncError = null;
+                    await db.WeighingRecords.Where(x => x.Id == r.Id).ExecuteUpdateAsync(s => s
+                        .SetProperty(x => x.SyncStatus, SyncStatus.Synced)
+                        .SetProperty(x => x.SyncedAt, now)
+                        .SetProperty(x => x.ServerSequence, res.ServerSequence)
+                        .SetProperty(x => x.LastSyncError, (string?)null), CancellationToken.None);
                     synced++;
                 }
                 else
                 {
-                    r.SyncStatus = SyncStatus.Error; r.LastSyncError = Trunc($"{res.Status}: {res.Message}");
+                    var error = Trunc($"{res.Status}: {res.Message}");
+                    await db.WeighingRecords.Where(x => x.Id == r.Id).ExecuteUpdateAsync(s => s
+                        .SetProperty(x => x.SyncStatus, SyncStatus.Error)
+                        .SetProperty(x => x.LastSyncError, error), CancellationToken.None);
                     log.LogError("Record {RecordId} rejected by server: {Status} {Message}", r.Id, res.Status, res.Message);
                 }
                 progressed++;
             }
-            await db.SaveChangesAsync(CancellationToken.None);
             if (progressed == 0) break; // tránh vòng lặp vô hạn nếu server không trả kết quả
         }
         return synced;

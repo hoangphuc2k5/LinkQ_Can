@@ -21,6 +21,15 @@ export class LocalApiService {
     return r.data!;
   }
 
+  async addSecond(id: string, secondWeightKg: number): Promise<LocalWeighing> {
+    const r = await firstValueFrom(this.http.post<ApiResponse<LocalWeighing>>(`${LOCAL_API_URL}/weighing/${id}/second`, { secondWeightKg }));
+    return r.data!;
+  }
+
+  downloadPdf(id: string): Promise<Blob> {
+    return firstValueFrom(this.http.get(`${LOCAL_API_URL}/weighing/${id}/pdf`, { responseType: 'blob' }));
+  }
+
   async list(opts: { search: string; from?: string; to?: string; page: number; pageSize: number }): Promise<HistoryResult> {
     let params = new HttpParams().set('page', opts.page).set('pageSize', opts.pageSize);
     if (opts.search) params = params.set('search', opts.search);

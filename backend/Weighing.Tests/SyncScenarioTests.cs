@@ -31,7 +31,8 @@ public class SyncScenarioTests
         var srv = Assert.Single(await server.RecordsAsync());
         Assert.Equal("51A-111.11", srv.LicensePlate);
         Assert.Equal("Machine A", srv.ClientId);
-        Assert.Equal(12345.5m, srv.WeightKg);
+        Assert.Equal(12345.5m, srv.FirstWeightKg);
+        Assert.Null(srv.SecondWeightKg);
         Assert.Equal(SyncStatus.Synced, Assert.Single(await a.LocalRecordsAsync()).SyncStatus);
 
         Assert.Equal(SyncOutcome.Success, (await Sync(b)).Outcome);
@@ -110,7 +111,7 @@ public class SyncScenarioTests
     public async Task T6_Duplicate_push_stores_one_record()
     {
         using var server = new ServerFixture(); using var a = new TestMachine(server, "Machine A");
-        var dto = new WeighingRecordDto(Guid.NewGuid(), "51A-999.99", 5000m, Direction.In, CargoStatus.Loaded, DateTime.UtcNow, "Machine A");
+        var dto = new WeighingRecordDto(Guid.NewGuid(), "51A-999.99", 5000m, null, null, Direction.In, CargoStatus.Loaded, DateTime.UtcNow, "Machine A");
         var req = new PushRequest("Machine A", [dto]);
         var first = await a.Api.PushAsync(req, default);
         var second = await a.Api.PushAsync(req, default);
@@ -127,10 +128,10 @@ public class SyncScenarioTests
     {
         using var server = new ServerFixture(); using var a = new TestMachine(server, "Machine A");
         var id = Guid.NewGuid(); var t = DateTime.UtcNow;
-        await a.Api.PushAsync(new("Machine A", [new(id, "51A-1", 1000m, Direction.In, CargoStatus.Loaded, t, "Machine A")]), default);
-        var res = await a.Api.PushAsync(new("Machine A", [new(id, "51A-1", 9999m, Direction.In, CargoStatus.Loaded, t, "Machine A")]), default);
+        await a.Api.PushAsync(new("Machine A", [new(id, "51A-1", 1000m, null, null, Direction.In, CargoStatus.Loaded, t, "Machine A")]), default);
+        var res = await a.Api.PushAsync(new("Machine A", [new(id, "51A-1", 9999m, null, null, Direction.In, CargoStatus.Loaded, t, "Machine A")]), default);
         Assert.Equal(PushItemStatus.Conflict, res.Results[0].Status);
-        Assert.Equal(1000m, Assert.Single(await server.RecordsAsync()).WeightKg);
+        Assert.Equal(1000m, Assert.Single(await server.RecordsAsync()).FirstWeightKg);
     }
 
     [Fact] // Test 7
@@ -234,7 +235,7 @@ public class SyncScenarioTests
         {
             db.WeighingRecords.Add(new LocalWeighingRecord
             {
-                Id = Guid.NewGuid(), LicensePlate = "99B-9.99", WeightKg = 5m, Direction = Direction.In,
+                Id = Guid.NewGuid(), LicensePlate = "99B-9.99", FirstWeightKg = 5m, Direction = Direction.In,
                 CargoStatus = CargoStatus.Loaded, WeighedAt = DateTime.UtcNow, ClientId = "Machine B", SyncStatus = SyncStatus.Synced
             });
             await db.SaveChangesAsync();
@@ -253,7 +254,7 @@ public class SyncScenarioTests
     public async Task Invalid_record_is_rejected_by_server()
     {
         using var server = new ServerFixture(); using var a = new TestMachine(server, "Machine A");
-        var bad = new WeighingRecordDto(Guid.NewGuid(), "51A-1", 0m, Direction.In, CargoStatus.Loaded, DateTime.UtcNow, "Machine A");
+        var bad = new WeighingRecordDto(Guid.NewGuid(), "51A-1", 0m, null, null, Direction.In, CargoStatus.Loaded, DateTime.UtcNow, "Machine A");
         var res = await a.Api.PushAsync(new("Machine A", [bad]), default);
         Assert.Equal(PushItemStatus.Invalid, res.Results[0].Status);
         Assert.Empty(await server.RecordsAsync());
@@ -284,5 +285,63 @@ public class SyncScenarioTests
         using var a = new TestMachine(server, "Machine A");
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             Weighing.Local.Api.Data.LocalBootstrap.InitializeAsync(a.Factory, "Machine B"));
+    }
+
+    [Fact]
+    public async Task Second_weigh_calculates_cargo_and_updates_existing_server_row()
+    {
+        using var server = new ServerFixture(); using var a = new TestMachine(server, "Machine A");
+        var saved = await a.SaveAsync("51A-1", 15000m);
+        Assert.Equal(SyncOutcome.Success, (await Sync(a)).Outcome);
+
+        var updated = await a.Service.AddSecondWeighAsync(saved.Id, 5000m);
+        Assert.Equal(15000m, updated.FirstWeightKg);
+        Assert.Equal(5000m, updated.SecondWeightKg);
+        Assert.Equal(10000m, updated.CargoWeightKg);
+        Assert.Equal(SyncStatus.Pending, updated.SyncStatus);
+
+        Assert.Equal(SyncOutcome.Success, (await Sync(a)).Outcome);
+        var srv = Assert.Single(await server.RecordsAsync());
+        Assert.Equal(5000m, srv.SecondWeightKg);
+        Assert.Equal(10000m, srv.CargoWeightKg);
+        Assert.Equal(1, srv.ServerSequence);
+        Assert.Equal(SyncStatus.Synced, Assert.Single(await a.LocalRecordsAsync()).SyncStatus);
+
+        await Assert.ThrowsAsync<Weighing.Local.Api.Services.WeighingValidationException>(() => a.Service.AddSecondWeighAsync(saved.Id, 4000m));
+    }
+
+    [Fact]
+    public async Task Second_weigh_before_first_sync_is_stored_once()
+    {
+        using var server = new ServerFixture(); using var a = new TestMachine(server, "Machine A");
+        var saved = await a.SaveAsync("51A-2", 8000m);
+        await a.Service.AddSecondWeighAsync(saved.Id, 3000m);
+        Assert.Equal(SyncOutcome.Success, (await Sync(a)).Outcome);
+        var srv = Assert.Single(await server.RecordsAsync());
+        Assert.Equal(8000m, srv.FirstWeightKg);
+        Assert.Equal(3000m, srv.SecondWeightKg);
+        Assert.Equal(5000m, srv.CargoWeightKg);
+    }
+
+    [Fact]
+    public async Task Second_weigh_rejects_tare_that_is_not_lighter()
+    {
+        using var server = new ServerFixture(); using var a = new TestMachine(server, "Machine A");
+        var saved = await a.SaveAsync("51A-3", 1000m);
+        await Assert.ThrowsAsync<Weighing.Local.Api.Services.WeighingValidationException>(() => a.Service.AddSecondWeighAsync(saved.Id, 1000m));
+        await Assert.ThrowsAsync<Weighing.Local.Api.Services.WeighingValidationException>(() => a.Service.AddSecondWeighAsync(saved.Id, 1001m));
+        Assert.Null(Assert.Single(await a.LocalRecordsAsync()).SecondWeightKg);
+    }
+
+    [Fact]
+    public async Task Pdf_starts_with_pdf_header()
+    {
+        using var server = new ServerFixture(); using var a = new TestMachine(server, "Machine A");
+        var saved = await a.SaveAsync("51A-4", 2000m);
+        await a.Service.AddSecondWeighAsync(saved.Id, 500m);
+        var dto = Assert.Single(await a.LocalRecordsAsync()).ToLocalDto();
+        var pdf = Weighing.Local.Api.Services.WeighingPdf.Create(dto);
+        Assert.True(pdf.Length > 200);
+        Assert.Equal("%PDF", System.Text.Encoding.ASCII.GetString(pdf, 0, 4));
     }
 }
