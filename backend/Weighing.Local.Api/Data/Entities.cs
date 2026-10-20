@@ -4,7 +4,9 @@ public class LocalWeighingRecord
 {
     public Guid Id { get; set; }
     public string LicensePlate { get; set; } = "";
-    public decimal WeightKg { get; set; }
+    public decimal FirstWeightKg { get; set; }       // cân lần 1: xe + hàng
+    public decimal? SecondWeightKg { get; set; }     // cân lần 2: xe sau khi dỡ hàng (bì)
+    public decimal? CargoWeightKg { get; set; }      // hàng = lần 1 − lần 2
     public Direction Direction { get; set; }
     public CargoStatus CargoStatus { get; set; }
     public DateTime WeighedAt { get; set; }
@@ -15,9 +17,10 @@ public class LocalWeighingRecord
     public int RetryCount { get; set; }
     public long? ServerSequence { get; set; }
 
-    public WeighingRecordDto ToDto() => new(Id, LicensePlate, WeightKg, Direction, CargoStatus, WeighedAt, ClientId);
-    public LocalWeighingDto ToLocalDto() => new(Id, LicensePlate, WeightKg, Direction, CargoStatus, WeighedAt, ClientId,
-        SyncStatus, SyncedAt, LastSyncError, RetryCount);
+    public WeighingRecordDto ToDto() => new(Id, LicensePlate, FirstWeightKg, SecondWeightKg, CargoWeightKg,
+        Direction, CargoStatus, WeighedAt, ClientId);
+    public LocalWeighingDto ToLocalDto() => new(Id, LicensePlate, FirstWeightKg, SecondWeightKg, CargoWeightKg,
+        Direction, CargoStatus, WeighedAt, ClientId, SyncStatus, SyncedAt, LastSyncError, RetryCount);
 }
 
 public class SyncState

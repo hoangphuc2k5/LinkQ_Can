@@ -6,7 +6,9 @@ GO
 CREATE TABLE dbo.WeighingRecords (
     Id              UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_WeighingRecords PRIMARY KEY,
     LicensePlate    NVARCHAR(20)  NOT NULL,
-    WeightKg        DECIMAL(18,3) NOT NULL,
+    FirstWeightKg   DECIMAL(18,3) NOT NULL,  -- cân lần 1: xe + hàng
+    SecondWeightKg  DECIMAL(18,3) NULL,      -- cân lần 2: trọng lượng bì
+    CargoWeightKg   DECIMAL(18,3) NULL,      -- hàng = lần 1 - lần 2
     Direction       INT           NOT NULL,   -- 1 = Xe vào, 2 = Xe ra
     CargoStatus     INT           NOT NULL,   -- 1 = Có hàng, 2 = Không có hàng
     WeighedAt       DATETIME2     NOT NULL,   -- UTC

@@ -5,6 +5,7 @@ using Weighing.Local.Api.Sync;
 namespace Weighing.Local.Api.Services;
 
 public sealed class WeighingValidationException(string message) : Exception(message);
+public sealed class WeighingNotFoundException(string message) : Exception(message);
 
 public sealed class WeighingService(IDbContextFactory<LocalDbContext> factory, IOptions<LocalOptions> options,
     TimeProvider clock, SyncTrigger trigger, IServerApiClient server)
@@ -17,7 +18,7 @@ public sealed class WeighingService(IDbContextFactory<LocalDbContext> factory, I
         {
             Id = Guid.NewGuid(),
             LicensePlate = PlateNormalizer.Normalize(req.LicensePlate),
-            WeightKg = req.WeightKg, Direction = req.Direction, CargoStatus = req.CargoStatus,
+            FirstWeightKg = req.FirstWeightKg, Direction = req.Direction, CargoStatus = req.CargoStatus,
             WeighedAt = now, ClientId = options.Value.ClientId, SyncStatus = SyncStatus.Pending
         };
         var error = WeighingValidator.Validate(entity.ToDto(), now);
@@ -28,6 +29,49 @@ public sealed class WeighingService(IDbContextFactory<LocalDbContext> factory, I
         await db.SaveChangesAsync(ct);
         trigger.Signal();
         return entity.ToLocalDto();
+    }
+
+    /// <summary>Ghi cân lần 2 vào phiếu đã có. Hàng = lần 1 − lần 2. Phiếu đã đồng bộ được đẩy lại để server cập nhật.</summary>
+    public async Task<LocalWeighingDto> AddSecondWeighAsync(Guid id, decimal secondWeightKg, CancellationToken ct = default)
+    {
+        if (secondWeightKg <= 0 || secondWeightKg > 1_000_000m || decimal.Round(secondWeightKg, 3) != secondWeightKg)
+            throw new WeighingValidationException("Cân lần 2 phải > 0, tối đa 1.000.000 kg và tối đa 3 chữ số thập phân.");
+
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var entity = await db.WeighingRecords.FirstOrDefaultAsync(r => r.Id == id && r.ClientId == options.Value.ClientId, ct);
+        if (entity is null) throw new WeighingNotFoundException("Không tìm thấy phiếu cân trên máy này.");
+        if (entity.SecondWeightKg is not null) throw new WeighingValidationException("Phiếu này đã có cân lần 2.");
+        var error = WeighingValidator.ValidateSecondWeigh(entity.FirstWeightKg, secondWeightKg, entity.FirstWeightKg - secondWeightKg);
+        if (error is not null) throw new WeighingValidationException(error);
+
+        entity.SecondWeightKg = secondWeightKg;
+        entity.CargoWeightKg = entity.FirstWeightKg - secondWeightKg;
+        if (entity.SyncStatus != SyncStatus.Pending)
+        {
+            entity.SyncStatus = SyncStatus.Pending;
+            entity.SyncedAt = null;
+            entity.LastSyncError = null;
+        }
+        await db.SaveChangesAsync(ct);
+        trigger.Signal();
+        return entity.ToLocalDto();
+    }
+
+    /// <summary>Phiếu trên máy này, hoặc phiếu trạm khác đang nằm trên server (để xuất PDF).</summary>
+    public async Task<LocalWeighingDto?> FindAsync(Guid id, CancellationToken ct = default)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var local = await db.WeighingRecords.AsNoTracking().FirstOrDefaultAsync(r => r.Id == id, ct);
+        if (local is not null) return local.ToLocalDto();
+        try
+        {
+            var remote = await server.GetByIdAsync(id, ct);
+            return remote is null ? null : FromServer(remote);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or ServerApiException && !ct.IsCancellationRequested)
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -49,8 +93,7 @@ public sealed class WeighingService(IDbContextFactory<LocalDbContext> factory, I
             // Ghim phiếu chưa lên server lên đầu trang 1; loại phiếu trùng Id để không hiện hai lần.
             var pinned = page == 1 ? pending.Where(p => !remoteIds.Contains(p.Id)).ToList() : [];
             var items = pinned.Select(p => p.ToLocalDto())
-                .Concat(remote.Items.Select(x => new LocalWeighingDto(x.Id, x.LicensePlate, x.WeightKg, x.Direction,
-                    x.CargoStatus, x.WeighedAt, x.ClientId, SyncStatus.Synced, x.WeighedAt, null, 0)))
+                .Concat(remote.Items.Select(FromServer))
                 .ToList();
             var total = remote.Total + pinned.Count;
             return new HistoryResult(items, total, page, pageSize, "server", null);
@@ -93,4 +136,8 @@ public sealed class WeighingService(IDbContextFactory<LocalDbContext> factory, I
             .Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(ct);
         return new(rows.Select(r => r.ToLocalDto()).ToList(), total, page, pageSize);
     }
+
+    private static LocalWeighingDto FromServer(ServerWeighingRecordDto x) => new(x.Id, x.LicensePlate, x.FirstWeightKg,
+        x.SecondWeightKg, x.CargoWeightKg, x.Direction, x.CargoStatus, x.WeighedAt, x.ClientId,
+        SyncStatus.Synced, x.WeighedAt, null, 0);
 }

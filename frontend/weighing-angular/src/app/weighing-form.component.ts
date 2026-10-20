@@ -32,13 +32,14 @@ function weightValidator(c: AbstractControl): ValidationErrors | null {
              [class.invalid]="invalid('licensePlate')" (input)="onPlate($event)">
       @if (invalid('licensePlate')) { <div class="err">Vui lòng nhập biển số xe (tối đa 20 ký tự, chỉ chữ/số/.-).</div> }
 
-      <label class="f" for="weight">Trọng lượng cân *</label>
+      <label class="f" for="weight">Cân lần 1 (xe + hàng) *</label>
       <div class="weight">
         <input id="weight" type="text" inputmode="decimal" formControlName="weightText" placeholder="0"
                [class.invalid]="invalid('weightText')" (input)="onWeight($event)">
         <span>kg</span>
       </div>
-      @if (invalid('weightText')) { <div class="err">Trọng lượng phải là số lớn hơn 0 (kg).</div> }
+      @if (invalid('weightText')) { <div class="err">Cân lần 1 phải là số lớn hơn 0 (kg).</div> }
+      <div class="muted">Cân lần 2 (xe sau khi dỡ hàng) nhập sau, trong bảng lịch sử.</div>
 
       <label class="f">Loại lượt cân</label>
       <div class="radios">
@@ -95,7 +96,7 @@ export class WeighingFormComponent {
     const v = this.form.getRawValue();
     this.saving.set(true); this.error.set('');
     try {
-      await this.store.create({ licensePlate: v.licensePlate.trim().toUpperCase(), weightKg: parseWeight(v.weightText), direction: v.direction, cargoStatus: v.cargoStatus });
+      await this.store.create({ licensePlate: v.licensePlate.trim().toUpperCase(), firstWeightKg: parseWeight(v.weightText), direction: v.direction, cargoStatus: v.cargoStatus });
       this.form.patchValue({ licensePlate: '', weightText: '' });
       this.form.markAsUntouched(); this.form.markAsPristine();
       this.plateEl().nativeElement.focus();

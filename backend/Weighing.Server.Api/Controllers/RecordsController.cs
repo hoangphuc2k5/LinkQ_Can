@@ -14,4 +14,13 @@ public sealed class RecordsController(SyncService sync) : ControllerBase
         [FromQuery] int page = 1, [FromQuery] int pageSize = 20, CancellationToken ct = default) =>
         Ok(ApiResponse<PagedResult<ServerWeighingRecordDto>>.Succeeded(
             await sync.QueryRecordsAsync(clientId, search, from, to, page, pageSize, ct)));
+
+    [HttpGet("{id:guid}")]
+    public async Task<IActionResult> GetOne(Guid id, CancellationToken ct)
+    {
+        var row = await sync.FindAsync(id, ct);
+        return row is null
+            ? NotFound(ApiResponse<ServerWeighingRecordDto>.Failed("not_found", "Không tìm thấy phiếu cân."))
+            : Ok(ApiResponse<ServerWeighingRecordDto>.Succeeded(row));
+    }
 }

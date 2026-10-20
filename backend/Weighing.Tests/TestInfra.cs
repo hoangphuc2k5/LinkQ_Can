@@ -107,7 +107,7 @@ public sealed class TestMachine : IDisposable
 
     public Task<LocalWeighingDto> SaveAsync(string plate = "51A-123.45", decimal kg = 1000m,
         Direction dir = Direction.In, CargoStatus cargo = CargoStatus.Loaded) =>
-        Service.CreateAsync(new CreateWeighingRequest { LicensePlate = plate, WeightKg = kg, Direction = dir, CargoStatus = cargo });
+        Service.CreateAsync(new CreateWeighingRequest { LicensePlate = plate, FirstWeightKg = kg, Direction = dir, CargoStatus = cargo });
 
     public async Task<List<LocalWeighingRecord>> LocalRecordsAsync()
     {

@@ -10,6 +10,8 @@ public interface IServerApiClient
     /// <summary>Tra cứu lịch sử tập trung trên server (mọi trạm). Ném ngoại lệ nếu server không trả lời.</summary>
     Task<PagedResult<ServerWeighingRecordDto>> QueryRecordsAsync(string? clientId, string? search,
         DateTime? fromUtc, DateTime? toUtc, int page, int pageSize, CancellationToken ct);
+    /// <summary>Null nếu server trả 404. Ném ngoại lệ nếu server không trả lời.</summary>
+    Task<ServerWeighingRecordDto?> GetByIdAsync(Guid id, CancellationToken ct);
 }
 
 public sealed class ServerApiException(HttpStatusCode status, string message) : Exception(message)
@@ -46,6 +48,13 @@ public sealed class ServerApiClient(HttpClient http) : IServerApiClient
         if (toUtc.HasValue) qs.Add("to=" + Uri.EscapeDataString(toUtc.Value.ToString("O")));
         using var r = await http.GetAsync("api/records?" + string.Join('&', qs), ct);
         return await ReadAsync<PagedResult<ServerWeighingRecordDto>>(r, ct);
+    }
+
+    public async Task<ServerWeighingRecordDto?> GetByIdAsync(Guid id, CancellationToken ct)
+    {
+        using var r = await http.GetAsync("api/records/" + id, ct);
+        if (r.StatusCode == HttpStatusCode.NotFound) return null;
+        return await ReadAsync<ServerWeighingRecordDto>(r, ct);
     }
 
     private static async Task<T> ReadAsync<T>(HttpResponseMessage r, CancellationToken ct)

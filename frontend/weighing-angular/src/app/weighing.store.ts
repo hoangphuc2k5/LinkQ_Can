@@ -89,6 +89,14 @@ export class WeighingStore {
     void this.refreshStatus();
   }
 
+  async addSecondWeigh(id: string, secondWeightKg: number): Promise<void> {
+    await this.api.addSecond(id, secondWeightKg);
+    this.showToast('ok', 'Đã lưu cân lần 2. Trọng lượng hàng = cân lần 1 − cân lần 2.');
+    this.page.set(1);
+    void this.loadHistory();
+    void this.refreshStatus();
+  }
+
   async syncNow(): Promise<void> {
     this.syncing.set(true); this.syncMessage.set(null);
     try {

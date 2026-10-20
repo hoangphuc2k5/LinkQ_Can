@@ -4,7 +4,9 @@ public class WeighingRecordEntity
 {
     public Guid Id { get; set; }
     public string LicensePlate { get; set; } = "";
-    public decimal WeightKg { get; set; }
+    public decimal FirstWeightKg { get; set; }
+    public decimal? SecondWeightKg { get; set; }
+    public decimal? CargoWeightKg { get; set; }
     public Direction Direction { get; set; }
     public CargoStatus CargoStatus { get; set; }
     public DateTime WeighedAt { get; set; }

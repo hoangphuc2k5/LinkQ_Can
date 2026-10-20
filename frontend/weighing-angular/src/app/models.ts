@@ -4,10 +4,11 @@ export type SyncStatus = 'Pending' | 'Synced' | 'Error';
 
 export interface ApiResponse<T> { success: boolean; data: T | null; error: { code: string; message: string } | null; }
 
-export interface CreateWeighing { licensePlate: string; weightKg: number; direction: Direction; cargoStatus: CargoStatus; }
+export interface CreateWeighing { licensePlate: string; firstWeightKg: number; direction: Direction; cargoStatus: CargoStatus; }
 
 export interface LocalWeighing {
-  id: string; licensePlate: string; weightKg: number; direction: Direction; cargoStatus: CargoStatus;
+  id: string; licensePlate: string; firstWeightKg: number; secondWeightKg: number | null; cargoWeightKg: number | null;
+  direction: Direction; cargoStatus: CargoStatus;
   weighedAt: string; clientId: string; syncStatus: SyncStatus; syncedAt: string | null; lastSyncError: string | null; retryCount: number;
 }
 
