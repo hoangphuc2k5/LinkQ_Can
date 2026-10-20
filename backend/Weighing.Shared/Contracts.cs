@@ -20,7 +20,6 @@ public sealed record ServerWeighingRecordDto(Guid Id, string LicensePlate, decim
 public sealed record PushRequest(string ClientId, List<WeighingRecordDto> Records);
 public sealed record PushItemResult(Guid Id, PushItemStatus Status, long? ServerSequence, string? Message);
 public sealed record PushResponse(List<PushItemResult> Results);
-public sealed record PullResponse(List<ServerWeighingRecordDto> Records, long NextCursor, bool HasMore);
 
 // ----- Unified response -----
 public sealed record ApiError(string Code, string Message);
@@ -47,8 +46,12 @@ public sealed record LocalWeighingDto(Guid Id, string LicensePlate, decimal Weig
 
 public sealed record PagedResult<T>(List<T> Items, int Total, int Page, int PageSize);
 
+/// <summary>Kết quả lịch sử của Local: lấy từ server khi online, hoặc từ SQLite cục bộ khi offline.</summary>
+public sealed record HistoryResult(List<LocalWeighingDto> Items, int Total, int Page, int PageSize,
+    string Source, string? Warning);
+
 public sealed record SyncStatusDto(string ClientId, bool? ServerOnline, bool IsSyncing, int PendingCount, int ErrorCount,
-    DateTime? LastSuccessfulSyncAt, long LastServerCursor, string? LastError, DateTime? NextRetryAt, int ConsecutiveFailures);
+    DateTime? LastSuccessfulSyncAt, string? LastError, DateTime? NextRetryAt, int ConsecutiveFailures);
 
 public sealed record SyncNowResultDto(string Outcome, string? Error, int Pushed, int Pulled);
 

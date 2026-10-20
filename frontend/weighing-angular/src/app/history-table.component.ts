@@ -15,6 +15,9 @@ import { LocalWeighing } from './models';
       <input type="date" #d [value]="store.date()" (input)="onFilter(q.value, d.value)">
       <button class="btn" type="button" (click)="q.value=''; d.value=''; onFilter('', '')">Xóa lọc</button>
     </div>
+    @if (store.historySource() === 'local') {
+      <div class="banner warn">{{ store.historyWarning() }}</div>
+    }
     <div class="tablewrap">
       <table>
         <thead><tr><th>Thời gian cân</th><th>Biển số</th><th>Trọng lượng</th><th>Lượt cân</th><th>Hàng</th><th>Máy</th><th>Đồng bộ</th></tr></thead>

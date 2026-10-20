@@ -7,9 +7,8 @@ public enum SyncOutcome { Success, Offline, Failed, AlreadyRunning }
 public sealed record SyncResult(SyncOutcome Outcome, string? Error = null, int Pushed = 0, int Pulled = 0);
 
 /// <summary>
-/// Đồng bộ hai chiều: push (outbox = bản ghi Pending) rồi pull theo cursor.
+/// Đồng bộ một chiều: đẩy (push) các bản ghi Pending của trạm này lên server trung tâm.
 ///  - Không đánh dấu Synced trước khi server xác nhận từng bản ghi.
-///  - Pull: ghi bản ghi + cập nhật cursor trong CÙNG một SaveChanges (một transaction).
 ///  - SemaphoreSlim(1,1) bảo đảm không có hai tiến trình đồng bộ chạy chồng nhau.
 /// </summary>
 public sealed class SyncEngine(
@@ -32,7 +31,7 @@ public sealed class SyncEngine(
             }
             tracker.SetOnline();
             var pushed = await PushPendingAsync(ct);
-            var pulled = await PullAsync(ct);
+            var pulled = 0;
 
             await using (var db = await factory.CreateDbContextAsync(CancellationToken.None))
             {
@@ -105,56 +104,6 @@ public sealed class SyncEngine(
         }
         return synced;
     }
-
-    private async Task<int> PullAsync(CancellationToken ct)
-    {
-        var pulled = 0;
-        while (true)
-        {
-            await using var db = await factory.CreateDbContextAsync(ct);
-            var st = await db.SyncStates.SingleAsync(s => s.Id == 1, ct);
-            var page = await server.PullAsync(st.LastServerCursor, Opt.PullPageSize, ct);
-            if (page.NextCursor < st.LastServerCursor) throw new InvalidOperationException("Server trả cursor lùi.");
-
-            var now = clock.GetUtcNow().UtcDateTime;
-            var ids = page.Records.Select(r => r.Id).ToList();
-            var existing = await db.WeighingRecords.Where(r => ids.Contains(r.Id)).ToDictionaryAsync(r => r.Id, ct);
-            foreach (var rec in page.Records)
-            {
-                if (!existing.TryGetValue(rec.Id, out var local))
-                {
-                    db.WeighingRecords.Add(new LocalWeighingRecord
-                    {
-                        Id = rec.Id, LicensePlate = rec.LicensePlate, WeightKg = rec.WeightKg, Direction = rec.Direction,
-                        CargoStatus = rec.CargoStatus, WeighedAt = rec.WeighedAt.ToUniversalTime(), ClientId = rec.ClientId,
-                        SyncStatus = SyncStatus.Synced, SyncedAt = now, ServerSequence = rec.ServerSequence
-                    });
-                    pulled++;
-                }
-                else if (SameContent(local, rec))
-                {
-                    // Server đã có bản ghi của chính mình (vd. phản hồi push bị mất) => xác nhận luôn.
-                    if (local.SyncStatus != SyncStatus.Synced) { local.SyncStatus = SyncStatus.Synced; local.SyncedAt = now; local.LastSyncError = null; }
-                    local.ServerSequence = rec.ServerSequence;
-                }
-                else
-                {
-                    local.SyncStatus = SyncStatus.Error;
-                    local.LastSyncError = "Xung đột: cùng Id nhưng nội dung khác với server.";
-                    log.LogError("Pull conflict on record {RecordId}", rec.Id);
-                }
-            }
-            st.LastServerCursor = page.NextCursor;
-            await db.SaveChangesAsync(CancellationToken.None); // 1 transaction: bản ghi + cursor
-            if (!page.HasMore) break;
-        }
-        return pulled;
-    }
-
-    private static bool SameContent(LocalWeighingRecord l, ServerWeighingRecordDto s) =>
-        l.LicensePlate == s.LicensePlate && l.WeightKg == s.WeightKg && l.Direction == s.Direction &&
-        l.CargoStatus == s.CargoStatus && l.ClientId == s.ClientId &&
-        l.WeighedAt.ToUniversalTime().Ticks == s.WeighedAt.ToUniversalTime().Ticks;
 
     private static string Trunc(string s) => s.Length > 500 ? s[..500] : s;
 }

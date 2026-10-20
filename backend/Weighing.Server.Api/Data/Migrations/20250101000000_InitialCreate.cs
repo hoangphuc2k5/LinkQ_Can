@@ -32,7 +32,8 @@ public class InitialCreate : Migration
             name: "SyncCounters",
             columns: t => new { Id = t.Column<int>(nullable: false), Value = t.Column<long>(nullable: false) },
             constraints: t => t.PrimaryKey("PK_SyncCounters", x => x.Id));
-        mb.InsertData("SyncCounters", new[] { "Id", "Value" }, new object[] { 1, 0L });
+        // Seed dòng bộ đếm bằng SQL thuần (chạy được trên cả SQL Server và SQLite test, không phụ thuộc model EF).
+        mb.Sql("INSERT INTO SyncCounters (Id, Value) VALUES (1, 0);");
     }
 
     protected override void Down(MigrationBuilder mb)

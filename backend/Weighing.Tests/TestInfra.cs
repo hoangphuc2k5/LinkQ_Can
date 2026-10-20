@@ -87,12 +87,12 @@ public sealed class TestMachine : IDisposable
     public SyncStatusTracker Tracker { get; } = new();
     private readonly bool _ownsFile;
 
-    public TestMachine(ServerFixture server, string clientId, string? dbPath = null, int pullPage = 200)
+    public TestMachine(ServerFixture server, string clientId, string? dbPath = null)
     {
         ClientId = clientId;
         _ownsFile = dbPath is null;
         DbPath = dbPath ?? Path.Combine(Path.GetTempPath(), $"loc-{Guid.NewGuid():N}.db");
-        var opt = new LocalOptions { ClientId = clientId, DatabasePath = DbPath, PullPageSize = pullPage, PushBatchSize = 50 };
+        var opt = new LocalOptions { ClientId = clientId, DatabasePath = DbPath, PushBatchSize = 50, HistoryTimeoutSeconds = 3 };
         var opts = Microsoft.Extensions.Options.Options.Create(opt);
         Factory = new TestFactory(DbPath);
         LocalBootstrap.InitializeAsync(Factory, clientId).GetAwaiter().GetResult();
@@ -102,7 +102,7 @@ public sealed class TestMachine : IDisposable
         http.DefaultRequestHeaders.Add("X-Api-Key", ServerFixture.ApiKey);
         Api = new ServerApiClient(http);
         Engine = new SyncEngine(Factory, Api, Tracker, opts, TimeProvider.System, NullLogger<SyncEngine>.Instance);
-        Service = new WeighingService(Factory, opts, TimeProvider.System, new SyncTrigger());
+        Service = new WeighingService(Factory, opts, TimeProvider.System, new SyncTrigger(), Api);
     }
 
     public Task<LocalWeighingDto> SaveAsync(string plate = "51A-123.45", decimal kg = 1000m,
@@ -113,12 +113,6 @@ public sealed class TestMachine : IDisposable
     {
         await using var db = Factory.CreateDbContext();
         return await db.WeighingRecords.AsNoTracking().ToListAsync();
-    }
-
-    public async Task<long> CursorAsync()
-    {
-        await using var db = Factory.CreateDbContext();
-        return (await db.SyncStates.AsNoTracking().SingleAsync()).LastServerCursor;
     }
 
     public void Dispose()
