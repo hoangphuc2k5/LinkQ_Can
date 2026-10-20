@@ -12,6 +12,47 @@ namespace Weighing.Tests;
 /// </summary>
 public class SyncScenarioTests
 {
+    [Fact]
+    public async Task History_shows_local_second_weigh_while_server_still_has_first_weigh_only()
+    {
+        using var server = new ServerFixture(); using var a = new TestMachine(server, "Machine A");
+        var saved = await a.SaveAsync("51A-1", 15000m);
+        await Sync(a);
+        await a.Service.AddSecondWeighAsync(saved.Id, 5000m);
+
+        var history = await a.Service.QueryAsync(null, null, null, 1, 20);
+        var row = Assert.Single(history.Items);
+        Assert.Equal(1, history.Total);
+        Assert.Equal(5000m, row.SecondWeightKg);
+        Assert.Equal(10000m, row.CargoWeightKg);
+        Assert.Equal(SyncStatus.Pending, row.SyncStatus);
+        Assert.Null(Assert.Single(await server.RecordsAsync()).SecondWeightKg);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Second_weigh_saved_during_push_is_sent_before_marking_synced(bool rejectFirst)
+    {
+        using var server = new ServerFixture(); using var a = new TestMachine(server, "Machine A");
+        var saved = await a.SaveAsync("51A-1", 15000m);
+        if (rejectFirst)
+        {
+            // Server already has the completed version; the in-flight first-weigh snapshot conflicts.
+            await a.Api.PushAsync(new("Machine A", [new(saved.Id, saved.LicensePlate, saved.FirstWeightKg,
+                5000m, 10000m, saved.Direction, saved.CargoStatus, saved.WeighedAt, saved.ClientId)]), default);
+        }
+        a.Net.AfterNextPush = async () => { await a.Service.AddSecondWeighAsync(saved.Id, 5000m); };
+
+        Assert.Equal(SyncOutcome.Success, (await Sync(a)).Outcome);
+        var local = Assert.Single(await a.LocalRecordsAsync());
+        var remote = Assert.Single(await server.RecordsAsync());
+        Assert.Equal(5000m, remote.SecondWeightKg);
+        Assert.Equal(10000m, remote.CargoWeightKg);
+        Assert.Equal(local.SecondWeightKg, remote.SecondWeightKg);
+        Assert.Equal(SyncStatus.Synced, local.SyncStatus);
+    }
+
     private static async Task<SyncResult> Sync(TestMachine m) => await m.Engine.SyncOnceAsync();
 
     private static void DeleteDb(string path)

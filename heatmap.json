@@ -1,0 +1,26 @@
+{
+  "entries": {
+    "\\\\?\\C:\\Users\\ADMIN\\.codex\\plugins\\cache\\openai-curated-remote\\superpowers\\6.4.2\\skills\\systematic-debugging\\SKILL.md": {
+      "path": "\\\\?\\C:\\Users\\ADMIN\\.codex\\plugins\\cache\\openai-curated-remote\\superpowers\\6.4.2\\skills\\systematic-debugging\\SKILL.md",
+      "access_count": 1,
+      "last_access": "2026-10-20T09:19:48.024492100+00:00",
+      "total_tokens_saved": 0,
+      "total_original_tokens": 2183,
+      "avg_compression_ratio": 0.0,
+      "agent_accesses": {
+        "local": 1
+      }
+    },
+    "\\\\?\\C:\\Users\\ADMIN\\.codex\\LEAN-CTX.md": {
+      "path": "\\\\?\\C:\\Users\\ADMIN\\.codex\\LEAN-CTX.md",
+      "access_count": 1,
+      "last_access": "2026-10-20T09:19:48.247387700+00:00",
+      "total_tokens_saved": 0,
+      "total_original_tokens": 810,
+      "avg_compression_ratio": 0.0,
+      "agent_accesses": {
+        "local": 1
+      }
+    }
+  }
+}

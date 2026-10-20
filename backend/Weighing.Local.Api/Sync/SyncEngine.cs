@@ -90,19 +90,23 @@ public sealed class SyncEngine(
             foreach (var r in batch)
             {
                 if (!byId.TryGetValue(r.Id, out var res)) continue;
+                // Chỉ áp dụng phản hồi cho đúng phiên bản đã gửi. Cân lần 2 có thể vừa được lưu
+                // trong khi chờ server; giữ Pending để vòng tiếp theo gửi phần bổ sung đó.
+                var unchanged = db.WeighingRecords.Where(x => x.Id == r.Id &&
+                    x.SecondWeightKg == r.SecondWeightKg && x.CargoWeightKg == r.CargoWeightKg);
                 if (res.Status is PushItemStatus.Accepted or PushItemStatus.Duplicate)
                 {
-                    await db.WeighingRecords.Where(x => x.Id == r.Id).ExecuteUpdateAsync(s => s
+                    var updated = await unchanged.ExecuteUpdateAsync(s => s
                         .SetProperty(x => x.SyncStatus, SyncStatus.Synced)
                         .SetProperty(x => x.SyncedAt, now)
                         .SetProperty(x => x.ServerSequence, res.ServerSequence)
                         .SetProperty(x => x.LastSyncError, (string?)null), CancellationToken.None);
-                    synced++;
+                    synced += updated;
                 }
                 else
                 {
                     var error = Trunc($"{res.Status}: {res.Message}");
-                    await db.WeighingRecords.Where(x => x.Id == r.Id).ExecuteUpdateAsync(s => s
+                    await unchanged.ExecuteUpdateAsync(s => s
                         .SetProperty(x => x.SyncStatus, SyncStatus.Error)
                         .SetProperty(x => x.LastSyncError, error), CancellationToken.None);
                     log.LogError("Record {RecordId} rejected by server: {Status} {Message}", r.Id, res.Status, res.Message);
