@@ -1,5 +1,6 @@
 import { Component, inject, signal } from '@angular/core';
 import { DatePipe, DecimalPipe } from '@angular/common';
+import { FormsModule } from '@angular/forms';
 import { errorMessage, LocalApiService } from './local-api.service';
 import { LocalWeighing } from './models';
 import { formatWeight, parseWeight } from './weighing-form.component';
@@ -8,7 +9,7 @@ import { WeighingStore } from './weighing.store';
 @Component({
   selector: 'app-history-table',
   standalone: true,
-  imports: [DatePipe, DecimalPipe],
+  imports: [DatePipe, DecimalPipe, FormsModule],
   template: `
   <section class="card">
     <h2>Lịch sử cân</h2>

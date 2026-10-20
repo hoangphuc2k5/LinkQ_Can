@@ -10,3 +10,5 @@ publish/
 test-data/
 .vs/
 .env
+.project
+.test-data

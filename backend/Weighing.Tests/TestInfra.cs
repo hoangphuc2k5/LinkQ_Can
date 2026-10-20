@@ -53,11 +53,17 @@ public sealed class FlakyHandler(HttpMessageHandler inner) : DelegatingHandler(i
 {
     public volatile bool Offline;
     public int DropNextPushResponses;
+    public Func<Task>? AfterNextPush;
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage req, CancellationToken ct)
     {
         if (Offline) throw new HttpRequestException("simulated offline");
         var resp = await base.SendAsync(req, ct);
+        if (req.RequestUri!.AbsolutePath.EndsWith("/sync/push") && AfterNextPush is { } afterPush)
+        {
+            AfterNextPush = null;
+            await afterPush();
+        }
         if (req.RequestUri!.AbsolutePath.EndsWith("/sync/push") && DropNextPushResponses > 0)
         {
             Interlocked.Decrement(ref DropNextPushResponses);

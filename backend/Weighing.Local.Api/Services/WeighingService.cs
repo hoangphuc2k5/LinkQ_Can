@@ -90,10 +90,12 @@ public sealed class WeighingService(IDbContextFactory<LocalDbContext> factory, I
             var remote = await server.QueryRecordsAsync(null, search, fromUtc, toUtc, page, pageSize, timeout.Token);
             var pending = await PendingLocalAsync(search, fromUtc, toUtc, ct);
             var remoteIds = remote.Items.Select(x => x.Id).ToHashSet();
+            var pendingById = pending.ToDictionary(p => p.Id);
             // Ghim phiếu chưa lên server lên đầu trang 1; loại phiếu trùng Id để không hiện hai lần.
             var pinned = page == 1 ? pending.Where(p => !remoteIds.Contains(p.Id)).ToList() : [];
             var items = pinned.Select(p => p.ToLocalDto())
-                .Concat(remote.Items.Select(FromServer))
+                .Concat(remote.Items.Select(r => pendingById.TryGetValue(r.Id, out var local)
+                    ? local.ToLocalDto() : FromServer(r)))
                 .ToList();
             var total = remote.Total + pinned.Count;
             return new HistoryResult(items, total, page, pageSize, "server", null);
