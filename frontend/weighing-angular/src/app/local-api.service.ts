@@ -2,7 +2,7 @@ import { HttpClient, HttpErrorResponse, HttpParams } from '@angular/common/http'
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import { LOCAL_API_URL } from './config';
-import { ApiResponse, CreateWeighing, LocalWeighing, PagedResult, SyncNowResult, SyncStatusInfo } from './models';
+import { ApiResponse, CreateWeighing, HistoryResult, LocalWeighing, SyncNowResult, SyncStatusInfo } from './models';
 
 export function errorMessage(e: unknown): string {
   if (e instanceof HttpErrorResponse) {
@@ -21,12 +21,21 @@ export class LocalApiService {
     return r.data!;
   }
 
-  async list(opts: { search: string; from?: string; to?: string; page: number; pageSize: number }): Promise<PagedResult<LocalWeighing>> {
+  async addSecond(id: string, secondWeightKg: number): Promise<LocalWeighing> {
+    const r = await firstValueFrom(this.http.post<ApiResponse<LocalWeighing>>(`${LOCAL_API_URL}/weighing/${id}/second`, { secondWeightKg }));
+    return r.data!;
+  }
+
+  downloadPdf(id: string): Promise<Blob> {
+    return firstValueFrom(this.http.get(`${LOCAL_API_URL}/weighing/${id}/pdf`, { responseType: 'blob' }));
+  }
+
+  async list(opts: { search: string; from?: string; to?: string; page: number; pageSize: number }): Promise<HistoryResult> {
     let params = new HttpParams().set('page', opts.page).set('pageSize', opts.pageSize);
     if (opts.search) params = params.set('search', opts.search);
     if (opts.from) params = params.set('from', opts.from);
     if (opts.to) params = params.set('to', opts.to);
-    const r = await firstValueFrom(this.http.get<ApiResponse<PagedResult<LocalWeighing>>>(`${LOCAL_API_URL}/weighing`, { params }));
+    const r = await firstValueFrom(this.http.get<ApiResponse<HistoryResult>>(`${LOCAL_API_URL}/weighing`, { params }));
     return r.data!;
   }
 

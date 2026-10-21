@@ -1,0 +1,37 @@
+# Client (Local API + giao diện Angular trong cùng image). Build từ thư mục gốc repo:
+#   docker build -f Dockerfile.client -t weighing-client:latest .
+# Cấu hình runtime (bắt buộc): Local__ClientId, Local__ServerUrl, Local__ServerApiKey.
+# Dữ liệu SQLite nằm ở /data (nên mount volume để giữ dữ liệu qua các lần chạy).
+
+# 1) Build giao diện Angular (cấu hình "container": gọi API cùng origin /api/local)
+FROM node:20-alpine AS web
+WORKDIR /web
+COPY frontend/weighing-angular/package.json ./
+RUN npm install
+COPY frontend/weighing-angular/ ./
+RUN npx ng build --configuration container
+
+# 2) Build Local API
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+COPY backend/ ./backend/
+RUN dotnet publish backend/Weighing.Local.Api/Weighing.Local.Api.csproj -c Release -o /app/out
+
+# 3) Runtime
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
+WORKDIR /app
+COPY --from=build /app/out .
+COPY --from=web /web/dist/weighing-angular/browser ./wwwroot
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libfontconfig1 fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /data && chown -R app:app /data
+ENV ASPNETCORE_ENVIRONMENT=Production \
+    ASPNETCORE_URLS=http://0.0.0.0:5100 \
+    Local__ListenUrl=http://0.0.0.0:5100 \
+    Local__AllowNonLoopback=true \
+    Local__DatabasePath=/data/weighing-local.db
+VOLUME ["/data"]
+EXPOSE 5100
+USER app
+ENTRYPOINT ["dotnet", "Weighing.Local.Api.dll"]

@@ -20,6 +20,8 @@ input.invalid { border-color: var(--err); }
 .err { color:var(--err); font-size:.85rem; margin-top:4px; }
 .btns { display:flex; gap:8px; margin-top:16px; flex-wrap:wrap; }
 .btn { padding:10px 18px; font-size:1rem; border:1px solid var(--line); background:#fff; border-radius:8px; cursor:pointer; }
+.btn.sm { padding:4px 8px; font-size:.85rem; }
+.actions { display:flex; gap:6px; }
 .btn.pri { background:var(--pri); border-color:var(--pri); color:#fff; font-weight:600; }
 .btn:disabled { opacity:.55; cursor:not-allowed; }
 .badge { display:inline-block; padding:3px 10px; border-radius:999px; font-size:.85rem; font-weight:600; }

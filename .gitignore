@@ -6,3 +6,9 @@ dist/
 *.db
 *.db-shm
 *.db-wal
+publish/
+test-data/
+.vs/
+.env
+.project
+.test-data

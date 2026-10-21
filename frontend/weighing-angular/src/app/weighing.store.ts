@@ -13,6 +13,9 @@ export class WeighingStore {
   readonly localServiceUp = signal(true);
   readonly records = signal<LocalWeighing[]>([]);
   readonly total = signal(0);
+  /** 'server' = lịch sử đầy đủ từ server; 'local' = server không khả dụng, chỉ có phiếu của máy này. */
+  readonly historySource = signal<'server' | 'local'>('server');
+  readonly historyWarning = signal<string | null>(null);
   readonly page = signal(1);
   readonly pageSize = 15;
   readonly search = signal('');
@@ -39,8 +42,11 @@ export class WeighingStore {
       const s = await this.api.status();
       this.localServiceUp.set(true);
       this.status.set(s);
-      // Dữ liệu mới từ máy kia (cursor đổi) hoặc trạng thái đồng bộ đổi (pending đổi) => nạp lại lịch sử.
-      if (!prev || prev.lastServerCursor !== s.lastServerCursor || prev.pendingCount !== s.pendingCount) await this.loadHistory();
+      // Nạp lại lịch sử khi: số phiếu chờ đổi, trạng thái server đổi (online/offline), hoặc đang xem nguồn 'local'.
+      const serverChanged = !prev || prev.serverOnline !== s.serverOnline;
+      if (!prev || prev.pendingCount !== s.pendingCount || serverChanged || this.historySource() === 'local') {
+        await this.loadHistory();
+      }
     } catch {
       this.localServiceUp.set(false);
     }
@@ -58,6 +64,7 @@ export class WeighingStore {
       }
       const r = await this.api.list({ search: this.search(), from, to, page: this.page(), pageSize: this.pageSize });
       this.records.set(r.items); this.total.set(r.total);
+      this.historySource.set(r.source); this.historyWarning.set(r.warning);
     } catch (e) {
       this.showToast('err', errorMessage(e));
     } finally {
@@ -68,14 +75,26 @@ export class WeighingStore {
   setFilters(search: string, date: string): void { this.search.set(search); this.date.set(date); this.page.set(1); void this.loadHistory(); }
   goToPage(p: number): void { this.page.set(Math.min(Math.max(1, p), this.totalPages())); void this.loadHistory(); }
 
-  /** Ném lỗi nếu thất bại để form giữ nguyên dữ liệu đã nhập. */
+  /**
+   * Ném lỗi nếu thất bại để form giữ nguyên dữ liệu đã nhập.
+   * Chỉ chờ bước ghi SQLite cục bộ; việc tải lại lịch sử/trạng thái (có thể chờ server tới timeout) chạy nền
+   * để nút "Đang lưu..." không bị kẹt khi server offline.
+   */
   async create(req: CreateWeighing): Promise<void> {
     await this.api.create(req);
     this.showToast(this.serverOffline() ? 'warn' : 'ok',
       this.serverOffline() ? 'Đã lưu trên máy. Dữ liệu sẽ tự đồng bộ khi có mạng.' : 'Đã lưu phiếu cân. Đang đồng bộ lên server...');
     this.page.set(1);
-    await this.loadHistory();
-    await this.refreshStatus();
+    void this.loadHistory();
+    void this.refreshStatus();
+  }
+
+  async addSecondWeigh(id: string, secondWeightKg: number): Promise<void> {
+    await this.api.addSecond(id, secondWeightKg);
+    this.showToast('ok', 'Đã lưu cân lần 2. Trọng lượng hàng = cân lần 1 − cân lần 2.');
+    this.page.set(1);
+    void this.loadHistory();
+    void this.refreshStatus();
   }
 
   async syncNow(): Promise<void> {

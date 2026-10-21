@@ -24,10 +24,37 @@ public sealed class WeighingController(WeighingService service) : ControllerBase
         }
     }
 
+    [HttpPost("{id:guid}/second")]
+    public async Task<IActionResult> Second(Guid id, [FromBody] SecondWeighRequest req, CancellationToken ct)
+    {
+        try
+        {
+            var dto = await service.AddSecondWeighAsync(id, req.SecondWeightKg, ct);
+            return Ok(ApiResponse<LocalWeighingDto>.Succeeded(dto));
+        }
+        catch (WeighingValidationException ex)
+        {
+            return BadRequest(ApiResponse<LocalWeighingDto>.Failed("validation", ex.Message));
+        }
+        catch (WeighingNotFoundException ex)
+        {
+            return NotFound(ApiResponse<LocalWeighingDto>.Failed("not_found", ex.Message));
+        }
+    }
+
+    [HttpGet("{id:guid}/pdf")]
+    public async Task<IActionResult> Pdf(Guid id, CancellationToken ct)
+    {
+        var dto = await service.FindAsync(id, ct);
+        if (dto is null) return NotFound(ApiResponse<object>.Failed("not_found", "Không tìm thấy phiếu cân."));
+        var name = "phieu-can-" + dto.LicensePlate.Replace(' ', '-') + ".pdf";
+        return File(WeighingPdf.Create(dto), "application/pdf", name);
+    }
+
     [HttpGet]
     public async Task<IActionResult> List([FromQuery] string? search, [FromQuery] DateTime? from, [FromQuery] DateTime? to,
         [FromQuery] int page = 1, [FromQuery] int pageSize = 20, CancellationToken ct = default) =>
-        Ok(ApiResponse<PagedResult<LocalWeighingDto>>.Succeeded(await service.QueryAsync(search, from, to, page, pageSize, ct)));
+        Ok(ApiResponse<HistoryResult>.Succeeded(await service.QueryAsync(search, from, to, page, pageSize, ct)));
 }
 
 [ApiController]
@@ -44,7 +71,7 @@ public sealed class SyncController(IDbContextFactory<LocalDbContext> factory, Sy
         var st = await db.SyncStates.AsNoTracking().SingleAsync(s => s.Id == 1, ct);
         var snap = tracker.Snapshot();
         var dto = new SyncStatusDto(options.Value.ClientId, snap.Online, snap.Syncing, pending, errors,
-            st.LastSuccessfulSyncAt, st.LastServerCursor, snap.LastError, snap.NextRetryAt, snap.ConsecutiveFailures);
+            st.LastSuccessfulSyncAt, snap.LastError, snap.NextRetryAt, snap.ConsecutiveFailures);
         return Ok(ApiResponse<SyncStatusDto>.Succeeded(dto));
     }
 

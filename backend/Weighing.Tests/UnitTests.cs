@@ -16,8 +16,9 @@ public class UnitTests
     [InlineData("", "")]
     public void Plate_is_normalized(string input, string expected) => Assert.Equal(expected, PlateNormalizer.Normalize(input));
 
-    private static WeighingRecordDto Rec(string plate = "51A-1", decimal kg = 100m, string client = "Machine A", DateTime? at = null) =>
-        new(Guid.NewGuid(), plate, kg, Direction.In, CargoStatus.Loaded, at ?? DateTime.UtcNow, client);
+    private static WeighingRecordDto Rec(string plate = "51A-1", decimal kg = 100m, string client = "Machine A", DateTime? at = null,
+        decimal? second = null, decimal? cargo = null) =>
+        new(Guid.NewGuid(), plate, kg, second, cargo, Direction.In, CargoStatus.Loaded, at ?? DateTime.UtcNow, client);
 
     [Fact] public void Valid_record_passes() => Assert.Null(WeighingValidator.Validate(Rec(), DateTime.UtcNow));
     [Fact] public void Zero_weight_fails() => Assert.NotNull(WeighingValidator.Validate(Rec(kg: 0m), DateTime.UtcNow));
@@ -26,6 +27,10 @@ public class UnitTests
     [Fact] public void Long_plate_fails() => Assert.NotNull(WeighingValidator.Validate(Rec(plate: new string('A', 21)), DateTime.UtcNow));
     [Fact] public void Future_time_fails() => Assert.NotNull(WeighingValidator.Validate(Rec(at: DateTime.UtcNow.AddDays(3)), DateTime.UtcNow));
     [Fact] public void Four_decimals_fail() => Assert.NotNull(WeighingValidator.Validate(Rec(kg: 1.2345m), DateTime.UtcNow));
+    [Fact] public void Second_weigh_without_cargo_fails() => Assert.NotNull(WeighingValidator.Validate(Rec(second: 40m), DateTime.UtcNow));
+    [Fact] public void Second_weigh_not_smaller_than_first_fails() => Assert.NotNull(WeighingValidator.Validate(Rec(kg: 100m, second: 100m, cargo: 0m), DateTime.UtcNow));
+    [Fact] public void Cargo_must_equal_first_minus_second() => Assert.NotNull(WeighingValidator.Validate(Rec(kg: 100m, second: 40m, cargo: 50m), DateTime.UtcNow));
+    [Fact] public void Complete_ticket_passes() => Assert.Null(WeighingValidator.Validate(Rec(kg: 100m, second: 40m, cargo: 60m), DateTime.UtcNow));
 
     [Fact]
     public void Tracker_counts_failures_and_resets_on_success()

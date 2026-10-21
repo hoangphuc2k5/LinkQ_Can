@@ -1,38 +1,103 @@
 using System.Net;
+using System.Net.Http.Json;
 using Microsoft.Data.Sqlite;
+using Weighing.Local.Api.Data;
 using Weighing.Local.Api.Sync;
 
 namespace Weighing.Tests;
 
-/// <summary>Các kịch bản bắt buộc Test 1..9 (mục 12 của đề bài) + xác thực, xung đột, phân trang.</summary>
+/// <summary>
+/// Mô hình: mỗi trạm chỉ đẩy phiếu của chính mình lên server trung tâm; server lưu tất cả phiếu
+/// và cung cấp tra cứu tập trung qua api/records. Trạm không kéo phiếu của máy khác về.
+/// </summary>
 public class SyncScenarioTests
 {
+    [Fact]
+    public async Task History_shows_local_second_weigh_while_server_still_has_first_weigh_only()
+    {
+        using var server = new ServerFixture(); using var a = new TestMachine(server, "Machine A");
+        var saved = await a.SaveAsync("51A-1", 15000m);
+        await Sync(a);
+        await a.Service.AddSecondWeighAsync(saved.Id, 5000m);
+
+        var history = await a.Service.QueryAsync(null, null, null, 1, 20);
+        var row = Assert.Single(history.Items);
+        Assert.Equal(1, history.Total);
+        Assert.Equal(5000m, row.SecondWeightKg);
+        Assert.Equal(10000m, row.CargoWeightKg);
+        Assert.Equal(SyncStatus.Pending, row.SyncStatus);
+        Assert.Null(Assert.Single(await server.RecordsAsync()).SecondWeightKg);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Second_weigh_saved_during_push_is_sent_before_marking_synced(bool rejectFirst)
+    {
+        using var server = new ServerFixture(); using var a = new TestMachine(server, "Machine A");
+        var saved = await a.SaveAsync("51A-1", 15000m);
+        if (rejectFirst)
+        {
+            // Server already has the completed version; the in-flight first-weigh snapshot conflicts.
+            await a.Api.PushAsync(new("Machine A", [new(saved.Id, saved.LicensePlate, saved.FirstWeightKg,
+                5000m, 10000m, saved.Direction, saved.CargoStatus, saved.WeighedAt, saved.ClientId)]), default);
+        }
+        a.Net.AfterNextPush = async () => { await a.Service.AddSecondWeighAsync(saved.Id, 5000m); };
+
+        Assert.Equal(SyncOutcome.Success, (await Sync(a)).Outcome);
+        var local = Assert.Single(await a.LocalRecordsAsync());
+        var remote = Assert.Single(await server.RecordsAsync());
+        Assert.Equal(5000m, remote.SecondWeightKg);
+        Assert.Equal(10000m, remote.CargoWeightKg);
+        Assert.Equal(local.SecondWeightKg, remote.SecondWeightKg);
+        Assert.Equal(SyncStatus.Synced, local.SyncStatus);
+    }
+
     private static async Task<SyncResult> Sync(TestMachine m) => await m.Engine.SyncOnceAsync();
 
+    private static void DeleteDb(string path)
+    {
+        SqliteConnection.ClearAllPools();
+        foreach (var f in new[] { path, path + "-shm", path + "-wal", path + "-journal" }) try { File.Delete(f); } catch { }
+    }
+
     [Fact] // Test 1
-    public async Task T1_MachineA_to_MachineB()
+    public async Task T1_MachineA_pushes_to_server_and_machineB_does_not_receive_it()
     {
         using var server = new ServerFixture(); using var a = new TestMachine(server, "Machine A"); using var b = new TestMachine(server, "Machine B");
         await a.SaveAsync("51A-111.11", 12345.5m);
-        Assert.Equal(SyncOutcome.Success, (await Sync(a)).Outcome);
+        var r = await Sync(a);
+        Assert.Equal(SyncOutcome.Success, r.Outcome); Assert.Equal(1, r.Pushed); Assert.Equal(0, r.Pulled);
+
+        var srv = Assert.Single(await server.RecordsAsync());
+        Assert.Equal("51A-111.11", srv.LicensePlate);
+        Assert.Equal("Machine A", srv.ClientId);
+        Assert.Equal(12345.5m, srv.FirstWeightKg);
+        Assert.Null(srv.SecondWeightKg);
+        Assert.Equal(SyncStatus.Synced, Assert.Single(await a.LocalRecordsAsync()).SyncStatus);
+
         Assert.Equal(SyncOutcome.Success, (await Sync(b)).Outcome);
-        var onB = Assert.Single(await b.LocalRecordsAsync());
-        Assert.Equal("51A-111.11", onB.LicensePlate);
-        Assert.Equal("Machine A", onB.ClientId);
-        Assert.Equal(SyncStatus.Synced, onB.SyncStatus);
-        Assert.Equal(12345.5m, onB.WeightKg);
+        Assert.Empty(await b.LocalRecordsAsync());
     }
 
     [Fact] // Test 2
-    public async Task T2_MachineB_to_MachineA()
+    public async Task T2_MachineB_pushes_to_server_and_machineA_history_stays_local()
     {
         using var server = new ServerFixture(); using var a = new TestMachine(server, "Machine A"); using var b = new TestMachine(server, "Machine B");
         await b.SaveAsync("29C-222.22", 800m, Direction.Out, CargoStatus.Empty);
         await Sync(b); await Sync(a);
-        var onA = Assert.Single(await a.LocalRecordsAsync());
-        Assert.Equal("Machine B", onA.ClientId);
-        Assert.Equal(Direction.Out, onA.Direction);
-        Assert.Equal(CargoStatus.Empty, onA.CargoStatus);
+
+        var srv = Assert.Single(await server.RecordsAsync());
+        Assert.Equal("Machine B", srv.ClientId);
+        Assert.Equal(Direction.Out, srv.Direction);
+        Assert.Equal(CargoStatus.Empty, srv.CargoStatus);
+        // Không sao chép dữ liệu về SQLite của máy A (tiết kiệm băng thông và dung lượng).
+        Assert.Empty(await a.LocalRecordsAsync());
+        // Nhưng lịch sử lấy từ server khi online thì máy A thấy phiếu của máy B.
+        var history = await a.Service.QueryAsync(null, null, null, 1, 20);
+        Assert.Equal("server", history.Source);
+        Assert.Equal(1, history.Total);
+        Assert.Equal("Machine B", Assert.Single(history.Items).ClientId);
     }
 
     [Fact] // Test 3
@@ -46,11 +111,11 @@ public class SyncScenarioTests
         Assert.Equal(5, local.Count);
         Assert.All(local, r => Assert.Equal(SyncStatus.Pending, r.SyncStatus));
         Assert.Empty(await server.RecordsAsync());
-        Assert.False(a.Tracker.Snapshot().Online);
+        Assert.Equal(false, a.Tracker.Snapshot().Online);
     }
 
     [Fact] // Test 4
-    public async Task T4_Reconnect_syncs_to_server_and_machineB()
+    public async Task T4_Reconnect_pushes_pending_to_server_only()
     {
         using var server = new ServerFixture(); using var a = new TestMachine(server, "Machine A"); using var b = new TestMachine(server, "Machine B");
         a.Net.Offline = true;
@@ -58,15 +123,15 @@ public class SyncScenarioTests
         await Sync(a);
         a.Net.Offline = false;
         var r = await Sync(a);
-        Assert.Equal(SyncOutcome.Success, r.Outcome); Assert.Equal(5, r.Pushed);
+        Assert.Equal(SyncOutcome.Success, r.Outcome); Assert.Equal(5, r.Pushed); Assert.Equal(0, r.Pulled);
         Assert.Equal(5, (await server.RecordsAsync()).Count);
         Assert.All(await a.LocalRecordsAsync(), x => Assert.Equal(SyncStatus.Synced, x.SyncStatus));
         await Sync(b);
-        Assert.Equal(5, (await b.LocalRecordsAsync()).Count);
+        Assert.Empty(await b.LocalRecordsAsync());
     }
 
     [Fact] // Test 5
-    public async Task T5_Both_offline_then_online_no_duplicates()
+    public async Task T5_Both_offline_then_online_server_has_all_and_no_duplicates()
     {
         using var server = new ServerFixture(); using var a = new TestMachine(server, "Machine A"); using var b = new TestMachine(server, "Machine B");
         a.Net.Offline = b.Net.Offline = true;
@@ -77,15 +142,17 @@ public class SyncScenarioTests
         var srv = await server.RecordsAsync();
         Assert.Equal(7, srv.Count);
         Assert.Equal(7, srv.Select(x => x.Id).Distinct().Count());
-        Assert.Equal(7, (await a.LocalRecordsAsync()).Count);
-        Assert.Equal(7, (await b.LocalRecordsAsync()).Count);
+        Assert.Equal(3, (await a.LocalRecordsAsync()).Count);
+        Assert.Equal(4, (await b.LocalRecordsAsync()).Count);
+        Assert.All(await a.LocalRecordsAsync(), x => Assert.Equal(SyncStatus.Synced, x.SyncStatus));
+        Assert.All(await b.LocalRecordsAsync(), x => Assert.Equal(SyncStatus.Synced, x.SyncStatus));
     }
 
     [Fact] // Test 6
     public async Task T6_Duplicate_push_stores_one_record()
     {
         using var server = new ServerFixture(); using var a = new TestMachine(server, "Machine A");
-        var dto = new WeighingRecordDto(Guid.NewGuid(), "51A-999.99", 5000m, Direction.In, CargoStatus.Loaded, DateTime.UtcNow, "Machine A");
+        var dto = new WeighingRecordDto(Guid.NewGuid(), "51A-999.99", 5000m, null, null, Direction.In, CargoStatus.Loaded, DateTime.UtcNow, "Machine A");
         var req = new PushRequest("Machine A", [dto]);
         var first = await a.Api.PushAsync(req, default);
         var second = await a.Api.PushAsync(req, default);
@@ -102,10 +169,10 @@ public class SyncScenarioTests
     {
         using var server = new ServerFixture(); using var a = new TestMachine(server, "Machine A");
         var id = Guid.NewGuid(); var t = DateTime.UtcNow;
-        await a.Api.PushAsync(new("Machine A", [new(id, "51A-1", 1000m, Direction.In, CargoStatus.Loaded, t, "Machine A")]), default);
-        var res = await a.Api.PushAsync(new("Machine A", [new(id, "51A-1", 9999m, Direction.In, CargoStatus.Loaded, t, "Machine A")]), default);
+        await a.Api.PushAsync(new("Machine A", [new(id, "51A-1", 1000m, null, null, Direction.In, CargoStatus.Loaded, t, "Machine A")]), default);
+        var res = await a.Api.PushAsync(new("Machine A", [new(id, "51A-1", 9999m, null, null, Direction.In, CargoStatus.Loaded, t, "Machine A")]), default);
         Assert.Equal(PushItemStatus.Conflict, res.Results[0].Status);
-        Assert.Equal(1000m, Assert.Single(await server.RecordsAsync()).WeightKg);
+        Assert.Equal(1000m, Assert.Single(await server.RecordsAsync()).FirstWeightKg);
     }
 
     [Fact] // Test 7
@@ -126,41 +193,37 @@ public class SyncScenarioTests
     }
 
     [Fact] // Test 8
-    public async Task T8_Restart_keeps_pending_data_and_cursor()
+    public async Task T8_Restart_keeps_pending_data_and_pushes_after_restart()
     {
         using var server = new ServerFixture();
         var path = Path.Combine(Path.GetTempPath(), $"restart-{Guid.NewGuid():N}.db");
-        using (var a1 = new TestMachine(server, "Machine A", path))
+        try
         {
-            a1.Net.Offline = true;
-            await a1.SaveAsync("R-1"); await a1.SaveAsync("R-2");
-        } // "tắt ứng dụng"
-        using var a2 = new TestMachine(server, "Machine A", path);   // "mở lại" cùng file SQLite
-        Assert.Equal(2, (await a2.LocalRecordsAsync()).Count(r => r.SyncStatus == SyncStatus.Pending));
-        Assert.Equal(SyncOutcome.Success, (await Sync(a2)).Outcome);
-        Assert.Equal(2, (await server.RecordsAsync()).Count);
-        var cursor = await a2.CursorAsync();
-        Assert.Equal(2, cursor);
-        using var a3 = new TestMachine(server, "Machine A", path);   // khởi động lại lần nữa: cursor còn nguyên
-        Assert.Equal(cursor, await a3.CursorAsync());
-        var r = await Sync(a3);
-        Assert.Equal(0, r.Pulled); Assert.Equal(0, r.Pushed);
-        a3.Dispose(); SqliteConnection.ClearAllPools();
-        foreach (var f in new[] { path, path + "-shm", path + "-wal", path + "-journal" }) try { File.Delete(f); } catch { }
+            using (var a1 = new TestMachine(server, "Machine A", path))
+            {
+                a1.Net.Offline = true;
+                await a1.SaveAsync("R-1"); await a1.SaveAsync("R-2");
+            } // "tắt ứng dụng"
+            using (var a2 = new TestMachine(server, "Machine A", path))   // "mở lại" cùng file SQLite
+            {
+                Assert.Equal(2, (await a2.LocalRecordsAsync()).Count(r => r.SyncStatus == SyncStatus.Pending));
+                var r = await Sync(a2);
+                Assert.Equal(SyncOutcome.Success, r.Outcome); Assert.Equal(2, r.Pushed);
+                Assert.Equal(2, (await server.RecordsAsync()).Count);
+            }
+            using (var a3 = new TestMachine(server, "Machine A", path))   // khởi động lại lần nữa: không còn Pending
+            {
+                Assert.Equal(0, (await a3.LocalRecordsAsync()).Count(r => r.SyncStatus == SyncStatus.Pending));
+                var r = await Sync(a3);
+                Assert.Equal(0, r.Pushed);
+                Assert.Equal(2, (await server.RecordsAsync()).Count);
+            }
+        }
+        finally { DeleteDb(path); }
     }
-
-    [Fact]
-    public async Task T8b_Wrong_client_id_on_existing_database_is_rejected()
-    {
-        using var server = new ServerFixture();
-        using var a = new TestMachine(server, "Machine A");
-        await Assert.ThrowsAsync<InvalidOperationException>(() => LocalBootstrap_Init(a.Factory, "Machine B"));
-    }
-    private static Task LocalBootstrap_Init(IDbContextFactory<Weighing.Local.Api.Data.LocalDbContext> f, string id) =>
-        Weighing.Local.Api.Data.LocalBootstrap.InitializeAsync(f, id);
 
     [Fact] // Test 9
-    public async Task T9_Concurrent_sync_no_loss_no_cursor_gap()
+    public async Task T9_Concurrent_sync_no_loss_no_sequence_gap()
     {
         using var server = new ServerFixture(); using var a = new TestMachine(server, "Machine A"); using var b = new TestMachine(server, "Machine B");
         for (var i = 0; i < 25; i++) { await a.SaveAsync($"A-{i}"); await b.SaveAsync($"B-{i}"); }
@@ -169,30 +232,70 @@ public class SyncScenarioTests
         await Sync(a); await Sync(b);
         var srv = await server.RecordsAsync();
         Assert.Equal(50, srv.Count);
-        Assert.Equal(Enumerable.Range(1, 50).Select(i => (long)i), srv.Select(x => x.ServerSequence)); // liên tục, không trùng, không hổng
-        Assert.Equal(50, (await a.LocalRecordsAsync()).Count);
-        Assert.Equal(50, (await b.LocalRecordsAsync()).Count);
-        Assert.Equal(50, await a.CursorAsync()); Assert.Equal(50, await b.CursorAsync());
+        Assert.Equal(Enumerable.Range(1, 50).Select(i => (long)i), srv.Select(x => x.ServerSequence).OrderBy(x => x)); // liên tục, không trùng, không hổng
+        Assert.Equal(25, srv.Count(x => x.ClientId == "Machine A"));
+        Assert.Equal(25, srv.Count(x => x.ClientId == "Machine B"));
+        Assert.All(await a.LocalRecordsAsync(), x => Assert.Equal(SyncStatus.Synced, x.SyncStatus));
+        Assert.All(await b.LocalRecordsAsync(), x => Assert.Equal(SyncStatus.Synced, x.SyncStatus));
+        Assert.Equal(25, (await a.LocalRecordsAsync()).Count);
+        Assert.Equal(25, (await b.LocalRecordsAsync()).Count);
     }
 
     [Fact]
-    public async Task Pull_is_paged_and_cursor_advances_per_page()
+    public async Task Records_api_lists_all_stations_with_client_filter_and_paging()
     {
-        using var server = new ServerFixture(); using var a = new TestMachine(server, "Machine A"); using var b = new TestMachine(server, "Machine B", pullPage: 2);
-        for (var i = 0; i < 5; i++) await a.SaveAsync($"P-{i}");
+        using var server = new ServerFixture(); using var a = new TestMachine(server, "Machine A"); using var b = new TestMachine(server, "Machine B");
+        for (var i = 0; i < 5; i++) await a.SaveAsync($"A-{i}");
         await Sync(a);
-        var r = await Sync(b);
-        Assert.Equal(5, r.Pulled);
-        Assert.Equal(5, await b.CursorAsync());
-        var page = await a.Api.PullAsync(0, 2, default);
-        Assert.True(page.HasMore); Assert.Equal(2, page.Records.Count); Assert.Equal(2, page.NextCursor);
+        for (var i = 0; i < 3; i++) await b.SaveAsync($"B-{i}");
+        await Sync(b);
+
+        using var client = server.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Api-Key", ServerFixture.ApiKey);
+        var all = await client.GetFromJsonAsync<ApiResponse<PagedResult<ServerWeighingRecordDto>>>(
+            "/api/records?page=1&pageSize=2", SharedJson.Options);
+        Assert.True(all!.Success);
+        Assert.Equal(8, all.Data!.Total); Assert.Equal(2, all.Data.Items.Count);
+
+        var onlyB = await client.GetFromJsonAsync<ApiResponse<PagedResult<ServerWeighingRecordDto>>>(
+            "/api/records?clientId=Machine%20B", SharedJson.Options);
+        Assert.Equal(3, onlyB!.Data!.Total);
+        Assert.All(onlyB.Data.Items, x => Assert.Equal("Machine B", x.ClientId));
+
+        using var anon = server.CreateClient();
+        Assert.Equal(HttpStatusCode.Unauthorized, (await anon.GetAsync("/api/records")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Local_history_shows_only_this_station_records()
+    {
+        using var server = new ServerFixture(); using var a = new TestMachine(server, "Machine A");
+        await a.SaveAsync("51A-1.00");
+        // Bản ghi có ClientId khác không được hiển thị trong lịch sử của trạm này.
+        await using (var db = a.Factory.CreateDbContext())
+        {
+            db.WeighingRecords.Add(new LocalWeighingRecord
+            {
+                Id = Guid.NewGuid(), LicensePlate = "99B-9.99", FirstWeightKg = 5m, Direction = Direction.In,
+                CargoStatus = CargoStatus.Loaded, WeighedAt = DateTime.UtcNow, ClientId = "Machine B", SyncStatus = SyncStatus.Synced
+            });
+            await db.SaveChangesAsync();
+        }
+        // Server không khả dụng => fallback SQLite: chỉ phiếu của chính trạm này.
+        a.Net.Offline = true;
+        var page = await a.Service.QueryAsync(null, null, null, 1, 20);
+        Assert.Equal("local", page.Source);
+        Assert.NotNull(page.Warning);
+        Assert.Equal(1, page.Total);
+        var item = Assert.Single(page.Items);
+        Assert.Equal("Machine A", item.ClientId);
     }
 
     [Fact]
     public async Task Invalid_record_is_rejected_by_server()
     {
         using var server = new ServerFixture(); using var a = new TestMachine(server, "Machine A");
-        var bad = new WeighingRecordDto(Guid.NewGuid(), "51A-1", 0m, Direction.In, CargoStatus.Loaded, DateTime.UtcNow, "Machine A");
+        var bad = new WeighingRecordDto(Guid.NewGuid(), "51A-1", 0m, null, null, Direction.In, CargoStatus.Loaded, DateTime.UtcNow, "Machine A");
         var res = await a.Api.PushAsync(new("Machine A", [bad]), default);
         Assert.Equal(PushItemStatus.Invalid, res.Results[0].Status);
         Assert.Empty(await server.RecordsAsync());
@@ -203,7 +306,7 @@ public class SyncScenarioTests
     {
         using var server = new ServerFixture();
         using var client = server.CreateClient();
-        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/sync/pull?cursor=0")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.PostAsync("/api/sync/push", null)).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/health")).StatusCode);
     }
 
@@ -214,5 +317,72 @@ public class SyncScenarioTests
         var saved = await a.SaveAsync("  51a-123.45  ", 10m);
         Assert.Equal("51A-123.45", saved.LicensePlate);
         await Assert.ThrowsAsync<Weighing.Local.Api.Services.WeighingValidationException>(() => a.SaveAsync("51A-1", 0m));
+    }
+
+    [Fact]
+    public async Task Wrong_client_id_on_existing_database_is_rejected()
+    {
+        using var server = new ServerFixture();
+        using var a = new TestMachine(server, "Machine A");
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Weighing.Local.Api.Data.LocalBootstrap.InitializeAsync(a.Factory, "Machine B"));
+    }
+
+    [Fact]
+    public async Task Second_weigh_calculates_cargo_and_updates_existing_server_row()
+    {
+        using var server = new ServerFixture(); using var a = new TestMachine(server, "Machine A");
+        var saved = await a.SaveAsync("51A-1", 15000m);
+        Assert.Equal(SyncOutcome.Success, (await Sync(a)).Outcome);
+
+        var updated = await a.Service.AddSecondWeighAsync(saved.Id, 5000m);
+        Assert.Equal(15000m, updated.FirstWeightKg);
+        Assert.Equal(5000m, updated.SecondWeightKg);
+        Assert.Equal(10000m, updated.CargoWeightKg);
+        Assert.Equal(SyncStatus.Pending, updated.SyncStatus);
+
+        Assert.Equal(SyncOutcome.Success, (await Sync(a)).Outcome);
+        var srv = Assert.Single(await server.RecordsAsync());
+        Assert.Equal(5000m, srv.SecondWeightKg);
+        Assert.Equal(10000m, srv.CargoWeightKg);
+        Assert.Equal(1, srv.ServerSequence);
+        Assert.Equal(SyncStatus.Synced, Assert.Single(await a.LocalRecordsAsync()).SyncStatus);
+
+        await Assert.ThrowsAsync<Weighing.Local.Api.Services.WeighingValidationException>(() => a.Service.AddSecondWeighAsync(saved.Id, 4000m));
+    }
+
+    [Fact]
+    public async Task Second_weigh_before_first_sync_is_stored_once()
+    {
+        using var server = new ServerFixture(); using var a = new TestMachine(server, "Machine A");
+        var saved = await a.SaveAsync("51A-2", 8000m);
+        await a.Service.AddSecondWeighAsync(saved.Id, 3000m);
+        Assert.Equal(SyncOutcome.Success, (await Sync(a)).Outcome);
+        var srv = Assert.Single(await server.RecordsAsync());
+        Assert.Equal(8000m, srv.FirstWeightKg);
+        Assert.Equal(3000m, srv.SecondWeightKg);
+        Assert.Equal(5000m, srv.CargoWeightKg);
+    }
+
+    [Fact]
+    public async Task Second_weigh_rejects_tare_that_is_not_lighter()
+    {
+        using var server = new ServerFixture(); using var a = new TestMachine(server, "Machine A");
+        var saved = await a.SaveAsync("51A-3", 1000m);
+        await Assert.ThrowsAsync<Weighing.Local.Api.Services.WeighingValidationException>(() => a.Service.AddSecondWeighAsync(saved.Id, 1000m));
+        await Assert.ThrowsAsync<Weighing.Local.Api.Services.WeighingValidationException>(() => a.Service.AddSecondWeighAsync(saved.Id, 1001m));
+        Assert.Null(Assert.Single(await a.LocalRecordsAsync()).SecondWeightKg);
+    }
+
+    [Fact]
+    public async Task Pdf_starts_with_pdf_header()
+    {
+        using var server = new ServerFixture(); using var a = new TestMachine(server, "Machine A");
+        var saved = await a.SaveAsync("51A-4", 2000m);
+        await a.Service.AddSecondWeighAsync(saved.Id, 500m);
+        var dto = Assert.Single(await a.LocalRecordsAsync()).ToLocalDto();
+        var pdf = Weighing.Local.Api.Services.WeighingPdf.Create(dto);
+        Assert.True(pdf.Length > 200);
+        Assert.Equal("%PDF", System.Text.Encoding.ASCII.GetString(pdf, 0, 4));
     }
 }
